@@ -46,6 +46,36 @@ func TestProbeControllerDormantDeadlineStillEmitsProbe(t *testing.T) {
 	}
 }
 
+func TestKnownResetDeadlineIncludesExternalResetObservation(t *testing.T) {
+	now := time.Date(2026, 7, 28, 2, 0, 0, 0, time.UTC)
+	base := ResetProbeBaseline(now.Add(5*time.Hour), 40, 5*time.Hour)
+	if got := deadlineFor(base, now, 30*time.Minute); !got.Equal(now.Add(30 * time.Minute)) {
+		t.Fatalf("known reset observation deadline = %s", got)
+	}
+	if got := deadlineFor(base, now, 0); !got.Equal(base.ResetAt.Add(probeRefreshAfterResetDelay)) {
+		t.Fatalf("disabled observation deadline = %s", got)
+	}
+	closeReset := ResetProbeBaseline(now.Add(10*time.Minute), 40, 5*time.Hour)
+	if got := deadlineFor(closeReset, now, 30*time.Minute); !got.Equal(closeReset.ResetAt.Add(probeRefreshAfterResetDelay)) {
+		t.Fatalf("mature reset deadline = %s", got)
+	}
+}
+
+func TestUnchangedWindowObservationReschedulesWithoutProbe(t *testing.T) {
+	now := time.Date(2026, 7, 28, 2, 0, 0, 0, time.UTC)
+	reset := now.Add(5 * time.Hour)
+	usage := 40.0
+	controller := NewProbeController(now)
+	controller.SetWindow(1, ProbeWindowFiveHour, ProbeWindow{State: ProbePendingCheck, Baseline: ResetProbeBaseline(reset, usage, 5*time.Hour)})
+	intents := controller.Advance(1, ProbeEvent{Kind: ProbeEventPrecheckResult, Now: now, ObservationInterval: 30 * time.Minute, Snapshots: map[ProbeWindowKind]QuotaSnapshot{
+		ProbeWindowFiveHour: {Valid: true, ResetAt: &reset, Usage: &usage},
+	}})
+	window, _ := controller.Window(1, ProbeWindowFiveHour)
+	if len(intents) != 0 || window.State != ProbeWaitingReset || !window.Deadline.Equal(now.Add(30*time.Minute)) {
+		t.Fatalf("unchanged observation scheduled probe: window=%#v intents=%#v", window, intents)
+	}
+}
+
 func TestMockGroupC(t *testing.T) {
 	t.Run("classifier", TestProbeClassifierOrderedRules)
 	t.Run("dual", TestProbeControllerDualWindowIndependent)
@@ -129,6 +159,54 @@ func validProbeState(s ProbeWindowState) bool {
 	}
 	return false
 }
+func TestFreshUnusedLazyResetPrecheckSendsProbe(t *testing.T) {
+	now := time.Date(2026, 7, 28, 1, 0, 0, 0, time.UTC)
+	controller := NewProbeController(now)
+	reset := now.Add(5 * time.Hour)
+	base := ResetProbeBaseline(reset, 0, 5*time.Hour)
+	controller.SetWindow(1, ProbeWindowFiveHour, ProbeWindow{State: ProbePendingCheck, Baseline: base})
+	usage := 0.0
+	intents := controller.Advance(1, ProbeEvent{Kind: ProbeEventPrecheckResult, Now: now, Snapshots: map[ProbeWindowKind]QuotaSnapshot{
+		ProbeWindowFiveHour: {Valid: true, ResetAt: &reset, Usage: &usage},
+	}})
+	window, _ := controller.Window(1, ProbeWindowFiveHour)
+	if window.State != ProbeSentAwaitingVerify || len(intents) != 1 || intents[0].Class != OperationProbeSend {
+		t.Fatalf("sliding unused reset was not probed: window=%#v intents=%#v", window, intents)
+	}
+}
+
+func TestExternalResetObservationSendsProbe(t *testing.T) {
+	now := time.Date(2026, 7, 28, 2, 0, 0, 0, time.UTC)
+	oldReset := now.Add(4 * time.Hour)
+	newReset := now.Add(5 * time.Hour)
+	zero := 0.0
+	controller := NewProbeController(now)
+	controller.SetWindow(1, ProbeWindowFiveHour, ProbeWindow{State: ProbePendingCheck, Baseline: ResetProbeBaseline(oldReset, 65, 5*time.Hour)})
+	intents := controller.Advance(1, ProbeEvent{Kind: ProbeEventPrecheckResult, Now: now, ObservationInterval: 30 * time.Minute, Snapshots: map[ProbeWindowKind]QuotaSnapshot{
+		ProbeWindowFiveHour: {Valid: true, ResetAt: &newReset, Usage: &zero},
+	}})
+	window, _ := controller.Window(1, ProbeWindowFiveHour)
+	if window.State != ProbeSentAwaitingVerify || !window.Baseline.ResetAt.Equal(newReset) || len(intents) != 1 || intents[0].Class != OperationProbeSend {
+		t.Fatalf("external lazy reset was not probed: window=%#v intents=%#v", window, intents)
+	}
+}
+
+func TestUnusedLazyResetShiftVerifyConverges(t *testing.T) {
+	now := time.Date(2026, 7, 28, 1, 0, 0, 0, time.UTC)
+	controller := NewProbeController(now)
+	base := ResetProbeBaseline(now.Add(-time.Minute), 0, 5*time.Hour)
+	controller.SetWindow(1, ProbeWindowFiveHour, ProbeWindow{State: ProbeSentAwaitingVerify, Baseline: base})
+	reset := now.Add(5 * time.Hour)
+	usage := 0.0
+	controller.Advance(1, ProbeEvent{Kind: ProbeEventVerifyResult, Now: now, Snapshots: map[ProbeWindowKind]QuotaSnapshot{
+		ProbeWindowFiveHour: {Valid: true, ResetAt: &reset, Usage: &usage},
+	}})
+	window, _ := controller.Window(1, ProbeWindowFiveHour)
+	if window.State != ProbeConfirmed {
+		t.Fatalf("post-probe reset did not converge: %#v", window)
+	}
+}
+
 func TestSuiteProbe(t *testing.T) {
 	t.Run("state", TestProbeControllerPersistentStateSetAndIllegalNoop)
 	t.Run("dormant", TestProbeControllerDormantDeadlineStillEmitsProbe)

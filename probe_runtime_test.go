@@ -227,6 +227,28 @@ func TestProbeRefreshPreservesAbsentFiveHourDuringNonterminalAttempt(t *testing.
 	}
 }
 
+func TestReconcileConfirmedProbeRearmsNextReset(t *testing.T) {
+	now := time.Date(2026, 7, 28, 1, 0, 0, 0, time.UTC)
+	r := newDueProbeRuntime(t, now, newProbeFixtureHost())
+	binding, ok := r.bindings.Lookup("a")
+	if !ok {
+		t.Fatal("binding missing")
+	}
+	used := 0.0
+	seconds := int64(fiveHourSeconds)
+	reset := now.Add(5 * time.Hour)
+	r.probeController.SetWindow(binding.Instance, ProbeWindowFiveHour, ProbeWindow{State: ProbeConfirmed})
+	quota := ParsedQuota{FiveHour: &QuotaWindow{Kind: WindowFiveHour, UsedPercent: &used, LimitWindowSeconds: &seconds, ResetAt: reset}}
+
+	if err := r.reconcileObservedProbeWindows(binding.Instance, quota); err != nil {
+		t.Fatal(err)
+	}
+	window, _ := r.probeController.Window(binding.Instance, ProbeWindowFiveHour)
+	if window.State != ProbeWaitingReset || !window.Deadline.Equal(now.Add(r.state.Config().QuotaRefreshInterval)) || window.Baseline.WindowLength != 5*time.Hour {
+		t.Fatalf("confirmed probe was not re-armed: %#v", window)
+	}
+}
+
 func TestProbeBootstrapRecreatesReappearedFiveHour(t *testing.T) {
 	now := time.Date(2026, 7, 14, 9, 0, 0, 0, time.UTC)
 	r := newDueProbeRuntime(t, now, newProbeFixtureHost())
@@ -252,6 +274,183 @@ func TestProbeBootstrapRecreatesReappearedFiveHour(t *testing.T) {
 	window, ok := r.probeController.Window(binding.Instance, ProbeWindowFiveHour)
 	if !ok || !window.Baseline.ResetAt.Equal(fiveReset) {
 		t.Fatalf("recreated FiveHour window = %#v, ok=%v", window, ok)
+	}
+}
+
+func TestUnusedLazyObservationRequiresAuthoritativeEvidence(t *testing.T) {
+	now := time.Date(2026, 7, 28, 1, 0, 0, 0, time.UTC)
+	zero, positive := 0.0, 1.0
+	lazy := QuotaWindow{Kind: WindowFiveHour, UsedPercent: &zero, ResetAt: now.Add(5 * time.Hour)}
+	if !looksLikeUnusedLazyObservation(now, lazy, zero, 5*time.Hour) {
+		t.Fatal("authoritative zero-usage lazy window was not detected")
+	}
+	missingUsage := lazy
+	missingUsage.UsedPercent = nil
+	active := lazy
+	active.UsedPercent = &positive
+	offBoundary := lazy
+	offBoundary.ResetAt = now.Add(4 * time.Hour)
+	if looksLikeUnusedLazyObservation(now, missingUsage, 0, 5*time.Hour) ||
+		looksLikeUnusedLazyObservation(now, active, positive, 5*time.Hour) ||
+		looksLikeUnusedLazyObservation(now, lazy, zero, 0) ||
+		looksLikeUnusedLazyObservation(now, offBoundary, zero, 5*time.Hour) {
+		t.Fatal("prewarm accepted incomplete or non-lazy evidence")
+	}
+}
+
+func TestProbeBootstrapSchedulesKnownWindowObservation(t *testing.T) {
+	now := time.Date(2026, 7, 28, 2, 0, 0, 0, time.UTC)
+	r := newDueProbeRuntime(t, now, newProbeFixtureHost())
+	binding, ok := r.bindings.Lookup("a")
+	if !ok {
+		t.Fatal("binding missing")
+	}
+	used := 35.0
+	seconds := int64(fiveHourSeconds)
+	reset := now.Add(5 * time.Hour)
+	r.state.UpsertQuota(AccountState{
+		AuthID: "a", AuthIndex: "idx", Provider: "codex", LastSuccessAt: now,
+		Quota: ParsedQuota{FiveHour: &QuotaWindow{Kind: WindowFiveHour, UsedPercent: &used, LimitWindowSeconds: &seconds, ResetAt: reset}},
+	})
+	r.probeController.SetWindow(binding.Instance, ProbeWindowFiveHour, ProbeWindow{
+		State: ProbeWaitingReset, Baseline: ResetProbeBaseline(reset, used, 5*time.Hour), Deadline: reset.Add(probeRefreshAfterResetDelay),
+	})
+
+	if err := r.bootstrapProbeWindows(); err != nil {
+		t.Fatal(err)
+	}
+	window, _ := r.probeController.Window(binding.Instance, ProbeWindowFiveHour)
+	if !window.Deadline.Equal(now.Add(r.state.Config().QuotaRefreshInterval)) {
+		t.Fatalf("known window was not scheduled for observation: %#v", window)
+	}
+}
+
+func TestProbeObservationIntervalHasThirtyMinuteFloor(t *testing.T) {
+	now := time.Date(2026, 7, 28, 2, 0, 0, 0, time.UTC)
+	r := newDueProbeRuntime(t, now, newProbeFixtureHost())
+	cfg := r.state.Config()
+	cfg.QuotaRefreshInterval = time.Minute
+	r.state.ReplaceConfig(cfg)
+	if got := r.probeObservationInterval(); got != 30*time.Minute {
+		t.Fatalf("short observation interval = %s", got)
+	}
+	cfg.QuotaRefreshInterval = 2 * time.Hour
+	r.state.ReplaceConfig(cfg)
+	if got := r.probeObservationInterval(); got != 2*time.Hour {
+		t.Fatalf("long observation interval = %s", got)
+	}
+}
+
+func TestProbeBootstrapSchedulesPersistedKnownWindowWithoutQuotaCache(t *testing.T) {
+	now := time.Date(2026, 7, 28, 3, 0, 0, 0, time.UTC)
+	r := newDueProbeRuntime(t, now, newProbeFixtureHost())
+	if accounts := r.state.Snapshot(now).Accounts; len(accounts) != 0 {
+		t.Fatalf("test requires an empty quota cache, accounts=%d", len(accounts))
+	}
+	binding, ok := r.bindings.Lookup("a")
+	if !ok {
+		t.Fatal("binding missing")
+	}
+	reset := now.Add(5 * time.Hour)
+	r.probeController.SetWindow(binding.Instance, ProbeWindowFiveHour, ProbeWindow{
+		State: ProbeWaitingReset, Baseline: ResetProbeBaseline(reset, 35, 5*time.Hour), Deadline: reset.Add(probeRefreshAfterResetDelay),
+	})
+	if err := r.persistProbeWindows(); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := r.bootstrapProbeWindows(); err != nil {
+		t.Fatal(err)
+	}
+	window, _ := r.probeController.Window(binding.Instance, ProbeWindowFiveHour)
+	if !window.Deadline.Equal(now.Add(r.probeObservationInterval())) {
+		t.Fatalf("persisted known window was not scheduled without quota cache: %#v", window)
+	}
+}
+
+func TestProbeBootstrapSchedulesObservedExternalResetImmediately(t *testing.T) {
+	now := time.Date(2026, 7, 28, 2, 0, 0, 0, time.UTC)
+	r := newDueProbeRuntime(t, now, newProbeFixtureHost())
+	binding, ok := r.bindings.Lookup("a")
+	if !ok {
+		t.Fatal("binding missing")
+	}
+	zero := 0.0
+	seconds := int64(fiveHourSeconds)
+	oldReset := now.Add(4 * time.Hour)
+	newReset := now.Add(5 * time.Hour)
+	r.state.UpsertQuota(AccountState{
+		AuthID: "a", AuthIndex: "idx", Provider: "codex", LastSuccessAt: now,
+		Quota: ParsedQuota{FiveHour: &QuotaWindow{Kind: WindowFiveHour, UsedPercent: &zero, LimitWindowSeconds: &seconds, ResetAt: newReset}},
+	})
+	r.probeController.SetWindow(binding.Instance, ProbeWindowFiveHour, ProbeWindow{
+		State: ProbeWaitingReset, Baseline: ResetProbeBaseline(oldReset, 65, 5*time.Hour), Deadline: oldReset.Add(probeRefreshAfterResetDelay),
+	})
+
+	if err := r.bootstrapProbeWindows(); err != nil {
+		t.Fatal(err)
+	}
+	window, _ := r.probeController.Window(binding.Instance, ProbeWindowFiveHour)
+	if !window.Deadline.Equal(now) || !window.Baseline.ResetAt.Equal(newReset) || window.Baseline.Usage != 0 {
+		t.Fatalf("external reset was not scheduled immediately: %#v", window)
+	}
+}
+
+func TestProbeBootstrapSchedulesFreshUnusedLazyWindowImmediately(t *testing.T) {
+	now := time.Date(2026, 7, 28, 1, 0, 0, 0, time.UTC)
+	r := newDueProbeRuntime(t, now, newProbeFixtureHost())
+	binding, ok := r.bindings.Lookup("a")
+	if !ok {
+		t.Fatal("binding missing")
+	}
+	r.probeController.RemoveWindow(binding.Instance, ProbeWindowFiveHour)
+	if err := r.persistProbeWindows(); err != nil {
+		t.Fatal(err)
+	}
+	used := 0.0
+	seconds := int64(fiveHourSeconds)
+	reset := now.Add(5 * time.Hour)
+	r.state.UpsertQuota(AccountState{
+		AuthID: "a", AuthIndex: "idx", Provider: "codex", LastSuccessAt: now,
+		Quota: ParsedQuota{FiveHour: &QuotaWindow{Kind: WindowFiveHour, UsedPercent: &used, LimitWindowSeconds: &seconds, ResetAt: reset}},
+	})
+
+	if err := r.bootstrapProbeWindows(); err != nil {
+		t.Fatal(err)
+	}
+	window, ok := r.probeController.Window(binding.Instance, ProbeWindowFiveHour)
+	if !ok || window.State != ProbeWaitingReset || !window.Deadline.Equal(now) || window.Baseline.WindowLength != 5*time.Hour {
+		t.Fatalf("fresh lazy window was not scheduled immediately: window=%#v ok=%v", window, ok)
+	}
+}
+
+func TestProbeBootstrapMigratesUnknownLengthLazyWindowImmediately(t *testing.T) {
+	now := time.Date(2026, 7, 28, 1, 0, 0, 0, time.UTC)
+	r := newDueProbeRuntime(t, now, newProbeFixtureHost())
+	binding, ok := r.bindings.Lookup("a")
+	if !ok {
+		t.Fatal("binding missing")
+	}
+	used := 0.0
+	seconds := int64(fiveHourSeconds)
+	reset := now.Add(5 * time.Hour)
+	r.state.UpsertQuota(AccountState{
+		AuthID: "a", AuthIndex: "idx", Provider: "codex", LastSuccessAt: now,
+		Quota: ParsedQuota{FiveHour: &QuotaWindow{Kind: WindowFiveHour, UsedPercent: &used, LimitWindowSeconds: &seconds, ResetAt: reset}},
+	})
+	r.probeController.SetWindow(binding.Instance, ProbeWindowFiveHour, ProbeWindow{
+		State: ProbeWaitingReset, Baseline: ResetProbeBaseline(reset, 0, 0), Deadline: reset.Add(probeRefreshAfterResetDelay),
+	})
+	if err := r.persistProbeWindows(); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := r.bootstrapProbeWindows(); err != nil {
+		t.Fatal(err)
+	}
+	window, _ := r.probeController.Window(binding.Instance, ProbeWindowFiveHour)
+	if window.Baseline.WindowLength != 5*time.Hour || window.State != ProbeWaitingReset || !window.Deadline.Equal(now) {
+		t.Fatalf("legacy lazy window was not migrated for immediate probe: %#v", window)
 	}
 }
 
@@ -977,12 +1176,55 @@ func TestProductionProbeRunsWhileNormalRefreshDormant(t *testing.T) {
 		}
 	}
 	w, ok := r.probeController.Window(legacyAuthInstanceID("a"), ProbeWindowFiveHour)
-	if !ok || w.State != ProbeConfirmed {
-		t.Fatalf("window=%#v ok=%v", w, ok)
+	if !ok || w.State != ProbeWaitingReset || !w.Deadline.Equal(now.Add(cfg.QuotaRefreshInterval)) {
+		t.Fatalf("window was not re-armed for the next reset: window=%#v ok=%v", w, ok)
 	}
 	a := accountByAuthID(t, state.Snapshot(now), "a")
 	if a.Circuit.FailureCount != 7 || a.Circuit.State != CircuitStateOpen || globalTrials.State(instance, now) != TrialActive {
 		t.Fatalf("probe mutated business state circuit=%#v trial=%v", a.Circuit, globalTrials.State(instance, now))
+	}
+}
+
+func TestProductionProbeDetectsExternalResetWhileNormalRefreshDormant(t *testing.T) {
+	now := time.Date(2026, 7, 28, 2, 0, 0, 0, time.UTC)
+	oldReset := now.Add(4 * time.Hour)
+	newReset := now.Add(5 * time.Hour)
+	quota := []byte(fmt.Sprintf(`{"rate_limit":{"primary_window":{"used_percent":0,"limit_window_seconds":18000,"reset_at":%q}}}`, newReset.Format(time.RFC3339)))
+	host := newProbeFixtureHost()
+	host.quota = [][]byte{quota, quota}
+	r := newDueProbeRuntime(t, now, host)
+	binding, ok := r.bindings.Lookup("a")
+	if !ok {
+		t.Fatal("binding missing")
+	}
+	r.probeController.SetWindow(binding.Instance, ProbeWindowFiveHour, ProbeWindow{
+		State: ProbeWaitingReset, Baseline: ResetProbeBaseline(oldReset, 65, 5*time.Hour), Deadline: now,
+	})
+	if err := r.persistProbeWindows(); err != nil {
+		t.Fatal(err)
+	}
+	if r.refreshController.Mode(now) != RefreshModeDormant {
+		t.Fatal("normal refresh not dormant")
+	}
+
+	if err := r.RunProbeDueOnce(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	host.mu.Lock()
+	urls := append([]string(nil), host.urls...)
+	host.mu.Unlock()
+	want := []string{r.state.Config().QuotaEndpoint, codexResetProbeEndpoint, r.state.Config().QuotaEndpoint}
+	if len(urls) != len(want) {
+		t.Fatalf("external reset request sequence = %v", urls)
+	}
+	for i := range want {
+		if urls[i] != want[i] {
+			t.Fatalf("external reset request sequence = %v", urls)
+		}
+	}
+	window, _ := r.probeController.Window(binding.Instance, ProbeWindowFiveHour)
+	if window.State != ProbeWaitingReset || !window.Deadline.Equal(now.Add(r.state.Config().QuotaRefreshInterval)) {
+		t.Fatalf("external reset probe was not re-armed: %#v", window)
 	}
 }
 

@@ -42,11 +42,12 @@ const (
 )
 
 type ProbeEvent struct {
-	Kind        ProbeEventKind
-	Window      ProbeWindowKind
-	Now         time.Time
-	Snapshots   map[ProbeWindowKind]QuotaSnapshot
-	RefreshMode RefreshMode
+	Kind                ProbeEventKind
+	Window              ProbeWindowKind
+	Now                 time.Time
+	Snapshots           map[ProbeWindowKind]QuotaSnapshot
+	RefreshMode         RefreshMode
+	ObservationInterval time.Duration
 }
 type ProbeController struct {
 	mu      sync.Mutex
@@ -161,7 +162,18 @@ func (c *ProbeController) Advance(i AuthInstanceID, e ProbeEvent) []Intent {
 			if !ok {
 				continue
 			}
-			cl := ClassifyProbeWindow(w.Baseline, snap, e.Now)
+			previousBaseline := w.Baseline
+			cl := ClassifyProbeWindow(previousBaseline, snap, e.Now)
+			// A never-used lazy window reports reset_at near now+window_length,
+			// including immediately after first observation. During precheck that
+			// is activation evidence only after a real compact request, so force
+			// the probe path regardless of the generic reset classification.
+			if e.Kind == ProbeEventPrecheckResult && looksLikeUnusedLazyReset(previousBaseline, snap, e.Now) {
+				lazyBaseline := previousBaseline
+				lazyBaseline.ResetAt = *snap.ResetAt
+				lazyBaseline.Usage = *snap.Usage
+				cl = ProbeClassification{Kind: ProbeStillLazy, Baseline: lazyBaseline}
+			}
 			w.Baseline = cl.Baseline
 			switch cl.Kind {
 			case ProbeActivatedNew, ProbeActivatedInferred:
@@ -169,7 +181,7 @@ func (c *ProbeController) Advance(i AuthInstanceID, e ProbeEvent) []Intent {
 				w.Deadline = time.Time{}
 			case ProbeNotDueYet:
 				w.State = ProbeWaitingReset
-				w.Deadline = deadlineFor(w.Baseline, e.Now)
+				w.Deadline = deadlineFor(w.Baseline, e.Now, e.ObservationInterval)
 			case ProbeAnomaly:
 				w.State = ProbeAnomalyHold
 				w.Deadline = e.Now.Add(probeUnknownResetRecheck)
@@ -203,21 +215,29 @@ func (c *ProbeController) Advance(i AuthInstanceID, e ProbeEvent) []Intent {
 		case ProbeEventRosterConfirmed:
 			if w.State == ProbeWaitingRoster {
 				w.State = ProbeWaitingReset
-				w.Deadline = deadlineFor(w.Baseline, e.Now)
+				w.Deadline = deadlineFor(w.Baseline, e.Now, e.ObservationInterval)
 				ws[k] = w
 			}
 		}
 	}
 	return out
 }
-func deadlineFor(b ProbeBaseline, now time.Time) time.Time {
+func deadlineFor(b ProbeBaseline, now time.Time, observationInterval time.Duration) time.Time {
 	if b.Kind == ProbeBaselineUsageOnly {
 		return b.NextRecheckAt
 	}
 	if b.ResetAt.IsZero() {
 		return now
 	}
-	return b.ResetAt.Add(probeRefreshAfterResetDelay)
+	resetDeadline := b.ResetAt.Add(probeRefreshAfterResetDelay)
+	if b.WindowLength <= 0 || observationInterval <= 0 {
+		return resetDeadline
+	}
+	observationDeadline := now.Add(observationInterval)
+	if observationDeadline.Before(resetDeadline) {
+		return observationDeadline
+	}
+	return resetDeadline
 }
 func probeBackoff(n int) time.Duration {
 	if n <= 1 {

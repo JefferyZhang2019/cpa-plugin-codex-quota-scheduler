@@ -157,6 +157,18 @@ reset time is reported) and does not increment the circuit breaker. Reset
 timestamps already consumed by a successful refresh are one-shot triggers; a
 repeated upstream timestamp cannot create a two-second refresh loop.
 
+When `enable_reset_probe` is true, a newly observed zero-usage window is checked
+immediately when its reset is close to the observation time plus the authoritative
+window length. This starts never-used lazy windows without waiting for a sliding
+reset deadline. Existing v0.2.0 baselines are upgraded once, and every confirmed
+probe is re-armed for the next observed reset. Known-duration windows also receive
+a read-only Probe observation at `max(quota_refresh_interval, 30m)`, including while
+normal refresh is Dormant, so a server-side compensation or promotional reset is
+detected without waiting for the old deadline. The compact request is sent only
+after an authoritative zero-usage lazy-reset signature is observed. Windows
+without authoritative usage, reset, or duration evidence are not pre-warmed
+blindly.
+
 ## Management UI
 
 ### Authoritative roster lifecycle
@@ -173,8 +185,11 @@ normal refresh Dormant and Probe windows in `WaitingRoster`. The
 appears among scheduler candidates. A later successful authoritative roster
 sync automatically recovers Capability B to Capability A.
 
-Normal quota refresh makes no real requests while Dormant. Probe scheduling is
-independent and may pre-wake roster synchronization before a due window.
+Normal quota refresh makes no real requests while Dormant. When reset probing is
+enabled, its independent read-only observations and due probes may pre-wake roster
+synchronization; the 30-minute observation floor prevents an accidentally short
+`quota_refresh_interval` from creating a tight background-read loop. With defaults,
+an otherwise invisible server-side reset is discovered within 30 minutes.
 
 Open the resource page from CPA's plugin resources, or visit:
 

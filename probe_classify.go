@@ -137,4 +137,15 @@ func ClassifyProbeWindow(base ProbeBaseline, snap QuotaSnapshot, now time.Time) 
 	}
 	return ProbeClassification{Kind: ProbeAmbiguous, Baseline: base}
 }
-func usageActivated(_, new float64) bool { return new == 0 }
+
+// A zero-usage snapshot is activation evidence only when the previous window
+// had actually consumed quota. Treating 0 -> 0 as activation makes a never-used
+// lazy window look healthy forever.
+func usageActivated(old, new float64) bool { return old > 0 && new == 0 }
+
+func looksLikeUnusedLazyReset(base ProbeBaseline, snap QuotaSnapshot, now time.Time) bool {
+	if !snap.Valid || base.Kind != ProbeBaselineReset || base.ResetAt.IsZero() || base.WindowLength <= 0 || snap.ResetAt == nil || snap.Usage == nil || *snap.Usage != 0 {
+		return false
+	}
+	return absDuration(snap.ResetAt.Sub(now.Add(base.WindowLength))) <= resetProbeCloseThreshold
+}

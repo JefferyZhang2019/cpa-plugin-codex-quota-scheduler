@@ -41,11 +41,73 @@ func (r *QuotaRefresher) initProbeRuntime() error {
 	return r.bootstrapProbeWindows()
 }
 
+func probeWindowUsage(window QuotaWindow) float64 {
+	if window.UsedPercent == nil {
+		return 0
+	}
+	return *window.UsedPercent
+}
+
+func (r *QuotaRefresher) probeObservationInterval() time.Duration {
+	if r == nil || r.state == nil {
+		return 0
+	}
+	interval := NormalizeConfig(r.state.Config()).QuotaRefreshInterval
+	if interval < probeUnknownResetRecheck {
+		return probeUnknownResetRecheck
+	}
+	return interval
+}
+
+func resetProbeWindowFromObservation(window QuotaWindow, usage float64, length, observationInterval time.Duration, now time.Time) ProbeWindow {
+	baseline := ResetProbeBaseline(window.ResetAt, usage, length)
+	deadline := deadlineFor(baseline, now, observationInterval)
+	if !deadline.After(now) {
+		deadline = now
+	}
+	return ProbeWindow{State: ProbeWaitingReset, Baseline: baseline, Deadline: deadline}
+}
+
+func looksLikeUnusedLazyObservation(observedAt time.Time, window QuotaWindow, usage float64, length time.Duration) bool {
+	if window.UsedPercent == nil || usage != 0 || observedAt.IsZero() || length <= 0 || window.ResetAt.IsZero() {
+		return false
+	}
+	return absDuration(window.ResetAt.Sub(observedAt.Add(length))) <= resetProbeCloseThreshold
+}
+
+func looksLikeExternalLazyReset(base ProbeBaseline, observedAt time.Time, window QuotaWindow, usage float64, length time.Duration) bool {
+	if base.Kind != ProbeBaselineReset || base.ResetAt.IsZero() || !looksLikeUnusedLazyObservation(observedAt, window, usage, length) {
+		return false
+	}
+	return usageActivated(base.Usage, usage) || absDuration(window.ResetAt.Sub(base.ResetAt)) > probeSkewTolerance
+}
+
+func (r *QuotaRefresher) schedulePersistedProbeObservations(now time.Time) {
+	observationInterval := r.probeObservationInterval()
+	for instance, windows := range r.probeController.Snapshot() {
+		for kind, window := range windows {
+			if window.State != ProbeWaitingReset || window.Baseline.Kind != ProbeBaselineReset || window.Baseline.WindowLength <= 0 {
+				continue
+			}
+			nextObservation := deadlineFor(window.Baseline, now, observationInterval)
+			if window.Deadline.IsZero() || nextObservation.Before(window.Deadline) {
+				window.Deadline = nextObservation
+				r.probeController.SetWindow(instance, kind, window)
+			}
+		}
+	}
+}
+
 func (r *QuotaRefresher) bootstrapProbeWindows() error {
 	if r.probeController == nil || !r.state.Config().EnableResetProbe {
 		return nil
 	}
 	now := r.now()
+	observationInterval := r.probeObservationInterval()
+	// Quota snapshots are intentionally in-memory only. Schedule observations
+	// directly from durable known-length baselines so restart does not restore
+	// the old far-future deadline while waiting for a normal quota refresh.
+	r.schedulePersistedProbeObservations(now)
 	for _, a := range r.state.Snapshot(now).Accounts {
 		b, ok := r.bindings.Lookup(a.AuthID)
 		if !ok {
@@ -58,25 +120,51 @@ func (r *QuotaRefresher) bootstrapProbeWindows() error {
 			if pair.w == nil {
 				continue
 			}
-			if _, ok := r.probeController.Window(b.Instance, pair.k); ok {
+			window := *pair.w
+			usage := probeWindowUsage(window)
+			length, _ := probeWindowDuration(window)
+			if existing, found := r.probeController.Window(b.Instance, pair.k); found {
+				if existing.State == ProbeConfirmed {
+					r.probeController.SetWindow(b.Instance, pair.k, resetProbeWindowFromObservation(window, usage, length, observationInterval, now))
+					continue
+				}
+				changed := false
+				unknownLength := existing.Baseline.Kind == ProbeBaselineReset && existing.Baseline.WindowLength <= 0
+				if unknownLength && length > 0 {
+					existing.Baseline.WindowLength = length
+					changed = true
+				}
+				if existing.State == ProbeWaitingReset {
+					lazyMigration := unknownLength && length > 0 && looksLikeUnusedLazyObservation(a.LastSuccessAt, window, usage, length)
+					if lazyMigration || looksLikeExternalLazyReset(existing.Baseline, a.LastSuccessAt, window, usage, length) {
+						// A newly observed server-side reset has the same lazy
+						// signature as first install. Rebase before probing so a
+						// large compensation jump cannot become an anomaly on verify.
+						existing.Baseline = ResetProbeBaseline(window.ResetAt, usage, length)
+						existing.Deadline = now
+						changed = true
+					} else if existing.Baseline.Kind == ProbeBaselineReset && existing.Baseline.WindowLength > 0 {
+						nextObservation := deadlineFor(existing.Baseline, now, observationInterval)
+						if existing.Deadline.IsZero() || nextObservation.Before(existing.Deadline) {
+							existing.Deadline = nextObservation
+							changed = true
+						}
+					}
+				}
+				if changed {
+					r.probeController.SetWindow(b.Instance, pair.k, existing)
+				}
 				continue
 			}
-			usage := 0.0
-			if pair.w.UsedPercent != nil {
-				usage = *pair.w.UsedPercent
-			}
-			base := ResetProbeBaseline(pair.w.ResetAt, usage, 0)
-			state := ProbeWaitingReset
-			deadline := pair.w.ResetAt.Add(probeRefreshAfterResetDelay)
-			if !deadline.After(now) {
-				state = ProbePendingCheck
-				deadline = now
+			next := resetProbeWindowFromObservation(window, usage, length, observationInterval, now)
+			if looksLikeUnusedLazyObservation(a.LastSuccessAt, window, usage, length) {
+				next.Deadline = now
 			}
 			if r.runtimeRoster().Capability != CapabilityA {
-				state = ProbeWaitingRoster
-				deadline = time.Time{}
+				next.State = ProbeWaitingRoster
+				next.Deadline = time.Time{}
 			}
-			r.probeController.SetWindow(b.Instance, pair.k, ProbeWindow{State: state, Baseline: base, Deadline: deadline})
+			r.probeController.SetWindow(b.Instance, pair.k, next)
 		}
 	}
 	return r.persistProbeWindows()
@@ -112,13 +200,14 @@ func (r *QuotaRefresher) reconcileObservedProbeWindows(instance AuthInstanceID, 
 	if r.runtimeStore == nil || r.probeController == nil || instance == 0 {
 		return nil
 	}
-	observed := map[ProbeWindowKind]bool{
-		ProbeWindowFiveHour: quota.FiveHour != nil,
-		ProbeWindowLong:     quota.LongWindow != nil,
+	observed := map[ProbeWindowKind]*QuotaWindow{
+		ProbeWindowFiveHour: quota.FiveHour,
+		ProbeWindowLong:     quota.LongWindow,
 	}
 	updated, err := r.runtimeStore.Update(func(persisted *PersistentState) error {
 		attempt := persisted.ProbeAttempts[instance]
-		for kind, present := range observed {
+		for kind, window := range observed {
+			present := window != nil
 			if present || (nonterminalProbeAttempt(attempt) && attemptReferencesWindow(attempt, kind)) {
 				continue
 			}
@@ -132,8 +221,13 @@ func (r *QuotaRefresher) reconcileObservedProbeWindows(instance AuthInstanceID, 
 	if err != nil {
 		return err
 	}
-	for kind, present := range observed {
-		if present {
+	for kind, window := range observed {
+		if window != nil {
+			if current, ok := r.probeController.Window(instance, kind); ok && current.State == ProbeConfirmed {
+				usage := probeWindowUsage(*window)
+				length, _ := probeWindowDuration(*window)
+				r.probeController.SetWindow(instance, kind, resetProbeWindowFromObservation(*window, usage, length, r.probeObservationInterval(), r.now()))
+			}
 			continue
 		}
 		if _, retained := updated.ProbeWindows[instance][kind]; !retained {
@@ -231,7 +325,7 @@ func (r *QuotaRefresher) recoverProbeFromRoster(bindings map[string]RuntimeBindi
 	}
 	now := r.now()
 	for _, binding := range bindings {
-		r.probeController.Advance(binding.Instance, ProbeEvent{Kind: ProbeEventRosterConfirmed, Now: now})
+		r.probeController.Advance(binding.Instance, ProbeEvent{Kind: ProbeEventRosterConfirmed, Now: now, ObservationInterval: r.probeObservationInterval()})
 		for _, kind := range []ProbeWindowKind{ProbeWindowFiveHour, ProbeWindowLong} {
 			window, ok := r.probeController.Window(binding.Instance, kind)
 			if ok && window.State == ProbeWaitingReset && !window.Deadline.After(now) {
@@ -588,7 +682,7 @@ func (r *QuotaRefresher) runTypedHeld(ctx context.Context, intent Intent, held *
 			if err != nil {
 				return fail(err, true)
 			}
-			r.probeController.Advance(intent.Instance, ProbeEvent{Kind: ProbeEventVerifyResult, Now: r.now(), Snapshots: probeSnapshots(vr.Quota)})
+			r.probeController.Advance(intent.Instance, ProbeEvent{Kind: ProbeEventVerifyResult, Now: r.now(), Snapshots: probeSnapshots(vr.Quota), ObservationInterval: r.probeObservationInterval()})
 			if err = r.probeWAL.Complete(intent.Instance); err != nil {
 				return fail(err, true)
 			}
@@ -611,7 +705,7 @@ func (r *QuotaRefresher) runTypedHeld(ctx context.Context, intent Intent, held *
 			_ = r.probeWAL.Complete(intent.Instance)
 			return fail(err, false)
 		}
-		r.probeController.Advance(intent.Instance, ProbeEvent{Kind: ProbeEventPrecheckResult, Now: r.now(), Snapshots: probeSnapshots(pre.Quota)})
+		r.probeController.Advance(intent.Instance, ProbeEvent{Kind: ProbeEventPrecheckResult, Now: r.now(), Snapshots: probeSnapshots(pre.Quota), ObservationInterval: r.probeObservationInterval()})
 		var lazy []ProbeWindowKind
 		for _, k := range p.Windows {
 			if w, ok := r.probeController.Window(intent.Instance, k); ok && w.State == ProbeSentAwaitingVerify {
@@ -677,7 +771,7 @@ func (r *QuotaRefresher) runTypedHeld(ctx context.Context, intent Intent, held *
 		if err != nil {
 			return fail(err, true)
 		}
-		r.probeController.Advance(intent.Instance, ProbeEvent{Kind: ProbeEventVerifyResult, Now: r.now(), Snapshots: probeSnapshots(vr.Quota)})
+		r.probeController.Advance(intent.Instance, ProbeEvent{Kind: ProbeEventVerifyResult, Now: r.now(), Snapshots: probeSnapshots(vr.Quota), ObservationInterval: r.probeObservationInterval()})
 		for _, k := range lazy {
 			if w, ok := r.probeController.Window(intent.Instance, k); ok && w.State == ProbeRetryWait && w.Deadline.Before(attempt.SuppressUntil) {
 				w.Deadline = attempt.SuppressUntil

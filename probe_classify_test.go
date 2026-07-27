@@ -35,6 +35,44 @@ func TestProbeClassifierOrderedRules(t *testing.T) {
 	}
 }
 
+func TestUsageActivatedRequiresConsumedBaseline(t *testing.T) {
+	if usageActivated(0, 0) {
+		t.Fatal("0 -> 0 is not activation evidence")
+	}
+	if !usageActivated(80, 0) {
+		t.Fatal("positive -> 0 should remain activation evidence")
+	}
+}
+
+func TestUnusedLazyResetRequiresAuthoritativeEvidence(t *testing.T) {
+	now := time.Unix(1000, 0).UTC()
+	reset := now.Add(5 * time.Hour)
+	zero := 0.0
+	base := ResetProbeBaseline(reset, 0, 5*time.Hour)
+	snapshot := QuotaSnapshot{Valid: true, ResetAt: &reset, Usage: &zero}
+	if !looksLikeUnusedLazyReset(base, snapshot, now) {
+		t.Fatal("valid zero-usage lazy reset was not detected")
+	}
+
+	invalid := snapshot
+	invalid.Valid = false
+	missingUsage := snapshot
+	missingUsage.Usage = nil
+	missingReset := snapshot
+	missingReset.ResetAt = nil
+	zeroResetBase := base
+	zeroResetBase.ResetAt = time.Time{}
+	unknownLength := base
+	unknownLength.WindowLength = 0
+	if looksLikeUnusedLazyReset(base, invalid, now) ||
+		looksLikeUnusedLazyReset(base, missingUsage, now) ||
+		looksLikeUnusedLazyReset(base, missingReset, now) ||
+		looksLikeUnusedLazyReset(zeroResetBase, snapshot, now) ||
+		looksLikeUnusedLazyReset(unknownLength, snapshot, now) {
+		t.Fatal("lazy reset accepted incomplete or invalid evidence")
+	}
+}
+
 func TestUsageOnlyNeverEntersResetRules(t *testing.T) {
 	now := time.Unix(1000, 0).UTC()
 	base := UsageOnlyProbeBaseline(75, now.Add(30*time.Minute))

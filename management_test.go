@@ -862,13 +862,13 @@ func TestStatusPageUsesPlainChineseProbeAndMonthlyCopy(t *testing.T) {
 	page := renderStatusPageForTest(t, NewPluginState(DefaultConfig()))
 	for _, want := range []string{
 		"自动激活新的额度周期",
-		"当额度重置时间已经到达，但 OpenAI 尚未生成新的额度周期时",
+		"开启后，即使普通刷新处于休眠状态，也会按额度刷新间隔（最短 30 分钟）执行只读检查",
 		"账号列表未确认时仍允许额度探测（高风险）",
 		"通常应保持关闭",
 		"月度账号使用方式",
 		"优先使用月度账号",
 		`'settings.enableResetProbe':'Enable automatic reset probe'`,
-		`'settings.enableResetProbeHelp':'When the quota reset time has arrived but OpenAI has not yet generated a new quota cycle`,
+		`'settings.enableResetProbeHelp':'While enabled, the scheduler performs read-only quota checks at the quota refresh interval`,
 		`'settings.provisionalProbe':'Allow quota probes when the account roster is unconfirmed (high risk)'`,
 		`'settings.provisionalProbeHelp':'When CPA temporarily cannot confirm the current accounts and priorities`,
 		`'settings.monthlyMode':'Monthly mode'`,
