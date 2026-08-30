@@ -2228,6 +2228,65 @@ func sanitizedBodySummary(body []byte) string {
 	return summary
 }
 
+func sanitizedProbeResponseSummary(body []byte) string {
+	if len(body) == 0 {
+		return "<empty>"
+	}
+	var value any
+	if err := json.Unmarshal(body, &value); err != nil {
+		return fmt.Sprintf("<non-json response body: %d bytes>", len(body))
+	}
+	safe := probeDiagnosticValue(value)
+	if safe == nil {
+		return "<json response without diagnostic fields>"
+	}
+	encoded, err := json.Marshal(safe)
+	if err != nil {
+		return "<unavailable>"
+	}
+	summary := redactSecrets(string(encoded))
+	if len(summary) > maxErrorBodySummaryLen {
+		summary = summary[:maxErrorBodySummaryLen] + "..."
+	}
+	return summary
+}
+
+func probeDiagnosticValue(value any) any {
+	switch typed := value.(type) {
+	case map[string]any:
+		out := make(map[string]any)
+		for key, child := range typed {
+			switch strings.ToLower(key) {
+			case "error", "type", "code", "message", "detail", "title", "status", "param":
+				if sanitized := probeDiagnosticValue(child); sanitized != nil {
+					out[key] = sanitized
+				}
+			}
+		}
+		if len(out) == 0 {
+			return nil
+		}
+		return out
+	case []any:
+		out := make([]any, 0, len(typed))
+		for _, child := range typed {
+			if sanitized := probeDiagnosticValue(child); sanitized != nil {
+				out = append(out, sanitized)
+			}
+		}
+		if len(out) == 0 {
+			return nil
+		}
+		return out
+	case string:
+		return redactSecrets(typed)
+	case float64, bool, nil:
+		return typed
+	default:
+		return nil
+	}
+}
+
 func (ABIHostClient) ListAuths() ([]pluginapi.HostAuthFileEntry, error) {
 	result, err := callHostCallback(pluginabi.MethodHostAuthList, map[string]any{})
 	if err != nil {
