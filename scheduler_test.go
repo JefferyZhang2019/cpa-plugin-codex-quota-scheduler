@@ -254,7 +254,7 @@ func TestPickMonthlyPriorityMode(t *testing.T) {
 	}
 }
 
-func TestPickMonthlyExpiryOrderMode(t *testing.T) {
+func TestPickMonthlyExpiryOrderModeUsesKnownQuotaPressure(t *testing.T) {
 	now := time.Date(2026, 6, 21, 9, 0, 0, 0, time.UTC)
 	cfg := DefaultConfig()
 	cfg.MonthlyMode = MonthlyModeExpiryOrder
@@ -270,8 +270,8 @@ func TestPickMonthlyExpiryOrderMode(t *testing.T) {
 		},
 	}
 	decision := PickCodexAccount(req, snapshot, now)
-	if decision.AuthID != "weekly-soon" {
-		t.Fatalf("AuthID = %q, want weekly-soon", decision.AuthID)
+	if decision.AuthID != "monthly-later" {
+		t.Fatalf("AuthID = %q, want monthly-later with known quota pressure", decision.AuthID)
 	}
 }
 
