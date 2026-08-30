@@ -79,6 +79,9 @@ func oracleBefore(a, b AccountView, mode MonthlyMode) bool {
 	if mode == MonthlyModePriority && a.Family != b.Family {
 		return a.Family == AccountFamilyMonthly
 	}
+	if a.QuotaPressure != b.QuotaPressure {
+		return a.QuotaPressure > b.QuotaPressure
+	}
 	if a.Expiry.IsZero() != b.Expiry.IsZero() {
 		return !a.Expiry.IsZero()
 	}

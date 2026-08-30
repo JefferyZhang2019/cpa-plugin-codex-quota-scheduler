@@ -208,6 +208,31 @@ func TestPickWeeklyEarliestResetWithinPriority(t *testing.T) {
 	}
 }
 
+func TestPickUsesCombinedRemainingQuotaAndResetPressure(t *testing.T) {
+	now := time.Date(2026, 6, 21, 9, 0, 0, 0, time.UTC)
+	soonLow := weeklyAccount("soon-low", 5, now.Add(24*time.Hour), false)
+	laterHigh := weeklyAccount("later-high", 5, now.Add(72*time.Hour), false)
+	usedSoon := 80.0  // 20% / 24h = 0.83% per hour.
+	usedLater := 20.0 // 80% / 72h = 1.11% per hour.
+	soonLow.Quota.LongWindow.UsedPercent = &usedSoon
+	laterHigh.Quota.LongWindow.UsedPercent = &usedLater
+	snapshot := StateSnapshot{Config: DefaultConfig(), Now: now, Accounts: []AccountState{soonLow, laterHigh}}
+	decision := PickCodexAccount(requestWithCandidates("soon-low", "later-high"), snapshot, now)
+	if decision.AuthID != "later-high" {
+		t.Fatalf("AuthID = %q, want later-high with greater quota pressure", decision.AuthID)
+	}
+}
+
+func TestQuotaPressureUsesThirtyMinuteResetFloor(t *testing.T) {
+	now := time.Date(2026, 6, 21, 9, 0, 0, 0, time.UTC)
+	account := weeklyAccount("near-reset", 0, now.Add(time.Minute), false)
+	used := 75.0
+	account.Quota.LongWindow.UsedPercent = &used
+	if got, want := quotaPressure(account, now), 50.0; got != want {
+		t.Fatalf("quotaPressure = %v, want %v", got, want)
+	}
+}
+
 func TestPickMonthlyPriorityMode(t *testing.T) {
 	now := time.Date(2026, 6, 21, 9, 0, 0, 0, time.UTC)
 	cfg := DefaultConfig()

@@ -88,14 +88,16 @@ Within the same plugin priority:
 
 1. If `monthly_mode` is `priority`, monthly accounts come before weekly
    accounts.
-2. Otherwise, or within the same account family, the earlier account expiry is
-   preferred.
-3. Higher remaining quota wins the next tie.
+2. Accounts with higher quota pressure are preferred. Quota pressure is the
+   remaining long-window percentage divided by the hours until that window
+   resets, with a 30-minute minimum divisor.
+3. Earlier expiry, then higher remaining quota, break ties when pressure is
+   equal or unavailable.
 4. The stable account ID order breaks the final tie.
 
 With the default `monthly_mode: expiry_order`, weekly and monthly accounts share
-the same expiry-based Fill First ordering. The alternative `priority` mode
-explicitly prefers monthly accounts.
+the same combined remaining-quota/reset-pressure ordering. The alternative
+`priority` mode explicitly prefers monthly accounts before applying pressure.
 
 ### 4. Order unavailable accounts
 
@@ -251,7 +253,8 @@ log_retention: 24h
 
 - `expiry_order`: use expiry-based ordering across weekly and monthly accounts.
 - `priority`: prefer monthly accounts before weekly accounts within the same
-  selectable class and plugin priority.
+  selectable class and plugin priority. Within those boundaries, remaining
+  long-window quota and time to reset are combined as quota pressure.
 
 `quota_endpoint` is restricted to the expected ChatGPT quota endpoint and cannot
 be redirected to an arbitrary host.
