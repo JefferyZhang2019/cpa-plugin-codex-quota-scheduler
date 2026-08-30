@@ -274,9 +274,12 @@ The page provides:
 - quota refresh, log viewing/export, and configuration import/export; and
 - English and Chinese interface switching.
 
-Protected data and actions require the CPA Management key. The key remains only
-in the current browser page session and is not saved to plugin state,
-`localStorage`, `sessionStorage`, exports, or logs.
+Protected data and actions require the CPA Management key. By default, the key
+remains only in the current browser page session. The optional **Remember
+management key in this browser** setting saves it unencrypted in browser local
+storage and automatically reloads protected data on later visits. Enable this
+only on a trusted device. The key is never saved to plugin state, exports, or
+logs; clearing the checkbox removes the browser-stored copy.
 
 ## Privacy And Data Disclosure
 
