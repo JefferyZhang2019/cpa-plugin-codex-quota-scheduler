@@ -225,7 +225,7 @@ log_retention: 24h
 
 ## 管理界面
 
-从 CPA Management Center 打开 **Codex 调度器**，或者访问：
+从 CPA Management Center 打开 **Codex Scheduler**，或者访问：
 
 ```text
 /v0/resource/plugins/codex-quota-scheduler/status
@@ -240,6 +240,9 @@ log_retention: 24h
 - 别名、备注、标签、分组和单账号插件优先级编辑；
 - 额度刷新、日志查看/导出以及配置导入/导出；
 - 中英文界面切换。
+
+CPA 插件菜单 API 只能注册一个静态名称，因此所有管理界面的侧边栏统一显示
+**Codex Scheduler**。
 
 受保护的数据和操作需要 CPA 管理密钥。密钥只保留在当前浏览器页面会话中，
 不会写入插件状态、`localStorage`、`sessionStorage`、导出文件或日志。

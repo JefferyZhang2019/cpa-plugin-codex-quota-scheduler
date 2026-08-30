@@ -274,6 +274,9 @@ The page provides:
 - quota refresh, log viewing/export, and configuration import/export; and
 - English and Chinese interface switching.
 
+The CPA plugin menu API accepts only one static label, so the registered
+sidebar name is **Codex Scheduler** in every management UI language.
+
 Protected data and actions require the CPA Management key. The key remains only
 in the current browser page session and is not saved to plugin state,
 `localStorage`, `sessionStorage`, exports, or logs.
