@@ -715,6 +715,11 @@ func TestStatusHTMLUsesManagementAPIActionsModalProgressAndLogs(t *testing.T) {
 			t.Fatalf("html missing marker %q: %s", want, html)
 		}
 	}
+	for _, want := range []string{".quota-fill.warn{background:#f59e0b}", "quotaFillClass", "remaining<30?'danger':remaining<60?'warn':''"} {
+		if !strings.Contains(html, want) {
+			t.Fatalf("html missing quota color marker %q: %s", want, html)
+		}
+	}
 	for _, forbidden := range []string{"RESOURCE_ENDPOINT", "PUBLIC_STATUS_BASE", "requestPublicStatus", "metricSchedulerState", "metrics.scheduler", "/v0/resource/plugins/codex-quota-scheduler/status?action", "requestPlugin(action,options)", "details class=\"editor\"", "action_token"} {
 		if strings.Contains(html, forbidden) {
 			t.Fatalf("html still contains removed marker %q: %s", forbidden, html)
@@ -751,6 +756,40 @@ func TestStatusHTMLStaticCardShowsDistinctPriorityBadges(t *testing.T) {
 		if !strings.Contains(html, want) {
 			t.Fatalf("static account card missing priority badge %q: %s", want, html)
 		}
+	}
+}
+
+func TestStatusHTMLQuotaBarsUseRemainingPercentageColorBands(t *testing.T) {
+	now := time.Date(2026, 6, 21, 9, 0, 0, 0, time.UTC)
+	store := NewPluginState(DefaultConfig())
+	for _, item := range []struct {
+		id          string
+		usedPercent float64
+	}{
+		{id: "red", usedPercent: 71},    // 29% remaining.
+		{id: "orange", usedPercent: 70}, // 30% remaining.
+		{id: "green", usedPercent: 40},  // 60% remaining.
+	} {
+		account := weeklyAccount(item.id, 0, now.Add(7*24*time.Hour), false)
+		account.LastSuccessAt = now
+		account.Quota.FiveHour.UsedPercent = &item.usedPercent
+		account.Quota.LongWindow.UsedPercent = &item.usedPercent
+		store.UpsertQuota(account)
+	}
+
+	resp := HandleManagementRequest(store, pluginapi.ManagementRequest{Method: http.MethodGet, Path: "/status"}, now)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("StatusCode = %d, want %d; body=%s", resp.StatusCode, http.StatusOK, resp.Body)
+	}
+	html := string(resp.Body)
+	if got := strings.Count(html, `class="quota-fill danger"`); got != 2 {
+		t.Fatalf("danger quota bars = %d, want 2", got)
+	}
+	if got := strings.Count(html, `class="quota-fill warn"`); got != 2 {
+		t.Fatalf("orange quota bars = %d, want 2", got)
+	}
+	if got := strings.Count(html, `class="quota-fill "`); got != 2 {
+		t.Fatalf("green quota bars = %d, want 2", got)
 	}
 }
 
