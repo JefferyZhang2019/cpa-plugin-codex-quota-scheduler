@@ -27,6 +27,9 @@ func TestManagementRegisterExposesStatusResourceAndRoutes(t *testing.T) {
 	if resources["/status"].Menu == "" {
 		t.Fatalf("status resource Menu is empty: %#v", resources["/status"])
 	}
+	if resources["/status"].Menu != "Codex Scheduler" {
+		t.Fatalf("status resource Menu = %q, want English static label", resources["/status"].Menu)
+	}
 	if _, ok := resources["/status-data"]; ok {
 		t.Fatalf("status-data resource is still registered: %#v", resp.Resources)
 	}

@@ -179,7 +179,7 @@ func RegisterManagement() pluginapi.ManagementRegistrationResponse {
 		Resources: []pluginapi.ResourceRoute{
 			{
 				Path:        "/status",
-				Menu:        "Codex 调度器",
+				Menu:        "Codex Scheduler",
 				Description: "Open scheduler quota status.",
 			},
 		},
