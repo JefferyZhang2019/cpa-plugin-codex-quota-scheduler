@@ -340,14 +340,27 @@ func SettingsFromConfig(cfg Config) SettingsPayload {
 		RetryEnabled:                    cfg.RetryEnabled,
 		RetryShadow:                     cfg.RetryShadow,
 		RetryMaxAttempts:                cfg.RetryMaxAttempts,
-		RetryStallTimeout:               cfg.RetryStallTimeout.String(),
-		RetryHoldTimeout:                cfg.RetryHoldTimeout.String(),
-		RetryChainDeadline:              cfg.RetryChainDeadline.String(),
+		RetryStallTimeout:               formatRetryDuration(cfg.RetryStallTimeout),
+		RetryHoldTimeout:                formatRetryDuration(cfg.RetryHoldTimeout),
+		RetryChainDeadline:              formatRetryDuration(cfg.RetryChainDeadline),
 		RetryMaxFrames:                  cfg.RetryMaxFrames,
 		RetryMaxBytes:                   formatByteSize(cfg.RetryMaxBytes),
 		RetryStripReasoning:             cfg.RetryStripReasoning,
 		RetryChain:                      normalizedRetryChainPayload(cfg.RetryChain),
 	}
+}
+
+// formatRetryDuration renders a retry budget the way the page documents it. A
+// whole number of seconds becomes "60s" rather than Go's "1m0s", so the value
+// the page loads is a value the page's own validator accepts.
+func formatRetryDuration(value time.Duration) string {
+	if value <= 0 {
+		return "0s"
+	}
+	if value%time.Second == 0 {
+		return strconv.FormatInt(int64(value/time.Second), 10) + "s"
+	}
+	return value.String()
 }
 
 // normalizedRetryChainPayload keeps the API payload stable for an unset chain,
@@ -1473,7 +1486,7 @@ function retryEnsureEmptyState(){if(!retryChainEditor)return;if(retryChainEditor
 function retryChainRowNode(row){const wrapper=node('div','retryChainRow');wrapper.dataset.retryRow='1';const head=node('div','retryChainRowHead');const modelField=node('label','field');modelField.append(node('span','',t('retry.rowModel')));const modelInput=document.createElement('input');modelInput.setAttribute('list','retryModelOptions');modelInput.setAttribute('spellcheck','false');modelInput.dataset.retryModel='1';modelInput.value=(row&&row.model)||'';modelField.append(modelInput);const actions=node('div','retryRowActions');const addFallback=node('button','ghost','');addFallback.type='button';addFallback.textContent=t('retry.addFallback');const removeRow=node('button','ghost','');removeRow.type='button';removeRow.textContent=t('retry.removeRow');actions.append(addFallback,removeRow);head.append(modelField,actions);const fallbacks=node('div','retryFallbacks');const source=row&&Array.isArray(row.fallbacks)&&row.fallbacks.length?row.fallbacks:[{provider:'',model:''}];for(const target of source)fallbacks.append(retryFallbackNode(target,fallbacks));addFallback.addEventListener('click',()=>fallbacks.append(retryFallbackNode({provider:'',model:''},fallbacks)));removeRow.addEventListener('click',()=>{wrapper.remove();retryEnsureEmptyState()});wrapper.append(head,fallbacks);return wrapper}
 function renderRetryChainEditor(rows){if(!retryChainEditor)return;retryChainEditor.replaceChildren();for(const row of (Array.isArray(rows)?rows:[]))retryChainEditor.append(retryChainRowNode(row));retryEnsureEmptyState()}
 function fillRetrySettings(){const s=STATUS.settings||{};retryElement('retryEnabled').checked=s.retry_enabled===true;retryElement('retryShadow').checked=s.retry_shadow===true;retryElement('retryStripReasoning').checked=s.retry_strip_reasoning!==false;retryElement('retryMaxAttempts').value=s.retry_max_attempts||4;retryElement('retryMaxFrames').value=s.retry_max_frames||4096;retryElement('retryStallTimeout').value=s.retry_stall_timeout||'60s';retryElement('retryHoldTimeout').value=s.retry_hold_timeout||'90s';retryElement('retryChainDeadline').value=s.retry_chain_deadline||'240s';retryElement('retryMaxBytes').value=s.retry_max_bytes||'8MB';renderRetryChainEditor(s.retry_chain||[])}
-const RETRY_DURATION_RE=/^\d+(\.\d+)?(ns|us|µs|ms|s|m|h)+$/i;
+const RETRY_DURATION_RE=/^(\d+(\.\d+)?(ns|us|µs|ms|s|m|h))+$/i;
 const RETRY_SIZE_RE=/^\d+(\.\d+)?(B|KB|MB|GB|TB|KiB|MiB|GiB|TiB)$/i;
 function retryPayloadError(payload){const attempts=Number(payload.retry_max_attempts);if(!Number.isSafeInteger(attempts)||attempts<1||attempts>16)return 'retry.error.attempts';const frames=Number(payload.retry_max_frames);if(!Number.isSafeInteger(frames)||frames<1)return 'retry.error.frames';if(!RETRY_SIZE_RE.test(String(payload.retry_max_bytes||'')))return 'retry.error.size';for(const key of ['retry_stall_timeout','retry_hold_timeout','retry_chain_deadline']){if(!RETRY_DURATION_RE.test(String(payload[key]||'')))return 'retry.error.duration'}if(payload.retry_enabled){if(!Array.isArray(payload.retry_chain)||payload.retry_chain.length===0)return 'retry.invalidRow';for(const row of payload.retry_chain){if(!row.model||!Array.isArray(row.fallbacks)||row.fallbacks.length===0)return 'retry.invalidRow'}}return ''}
 async function saveRetrySettings(){try{if(!statusLoaded){await loadStatus();return}const payload=collectSettingsPayload();const problem=retryPayloadError(payload);if(problem){showNotice(t(problem),true,problem);return}await requestManagement('/settings',{method:'PUT',body:payload});settingsDirty=false;showNotice(t('notice.retrySaved'),false,'notice.retrySaved');await refreshStatus({management:true,fillSettings:true});await refreshRetryStats()}catch(error){showNotice(error.message||String(error),true)}}

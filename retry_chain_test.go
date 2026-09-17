@@ -1,7 +1,9 @@
 package main
 
 import (
+	"strings"
 	"testing"
+	"time"
 )
 
 func retryTestChainConfig() Config {
@@ -242,5 +244,78 @@ func TestParseByteSizeRoundTripsThroughFormat(t *testing.T) {
 	}
 	if reparsed != DefaultConfig().RetryMaxBytes {
 		t.Fatalf("byte budget changed across a round trip: %d -> %d", DefaultConfig().RetryMaxBytes, reparsed)
+	}
+}
+
+func TestRetrySettingsDurationRoundTrip(t *testing.T) {
+	// The page documents "60s" style values, and it validates what it loads with
+	// that same grammar, so the API must never hand it a Go-only form such as
+	// "1m0s" without the page understanding it.
+	cases := map[time.Duration]string{
+		60 * time.Second:                      "60s",
+		90 * time.Second:                      "90s",
+		240 * time.Second:                     "240s",
+		90*time.Second + 500*time.Millisecond: "1m30.5s",
+	}
+	for input, want := range cases {
+		if got := formatRetryDuration(input); got != want {
+			t.Fatalf("formatRetryDuration(%s) = %q, want %q", input, got, want)
+		}
+		parsed, err := time.ParseDuration(formatRetryDuration(input))
+		if err != nil || parsed != input {
+			t.Fatalf("round trip of %s = %s/%v", input, parsed, err)
+		}
+	}
+
+	cfg := DefaultConfig()
+	cfg.RetryEnabled = true
+	cfg.RetryChain = []RetryChainRow{{Model: "gpt-5.6-sol", Fallbacks: []RetryTarget{{Model: "gpt-5.6-luna"}}}}
+	payload := SettingsFromConfig(cfg)
+	for _, field := range []struct {
+		name string
+		raw  string
+		want time.Duration
+	}{
+		{"retry_stall_timeout", payload.RetryStallTimeout, cfg.RetryStallTimeout},
+		{"retry_hold_timeout", payload.RetryHoldTimeout, cfg.RetryHoldTimeout},
+		{"retry_chain_deadline", payload.RetryChainDeadline, cfg.RetryChainDeadline},
+	} {
+		if !strings.HasSuffix(field.raw, "s") || strings.ContainsAny(field.raw, "mh") {
+			t.Fatalf("%s = %q, want a plain seconds value", field.name, field.raw)
+		}
+		parsed, err := time.ParseDuration(field.raw)
+		if err != nil {
+			t.Fatalf("%s = %q is not parseable: %v", field.name, field.raw, err)
+		}
+		if parsed != field.want {
+			t.Fatalf("%s = %q, want %s", field.name, field.raw, field.want)
+		}
+	}
+
+	restored, err := ConfigFromSettings(cfg, payload)
+	if err != nil {
+		t.Fatalf("ConfigFromSettings: %v", err)
+	}
+	if restored.RetryStallTimeout != cfg.RetryStallTimeout ||
+		restored.RetryHoldTimeout != cfg.RetryHoldTimeout ||
+		restored.RetryChainDeadline != cfg.RetryChainDeadline {
+		t.Fatalf("budgets changed across the settings round trip: %+v", restored)
+	}
+}
+
+func TestConfigFromSettingsAcceptsCompoundDurations(t *testing.T) {
+	base := DefaultConfig()
+	payload := SettingsFromConfig(base)
+	payload.RetryStallTimeout = "1m0s"
+	payload.RetryHoldTimeout = "1m30s"
+	payload.RetryChainDeadline = "4m0s"
+	cfg, err := ConfigFromSettings(base, payload)
+	if err != nil {
+		t.Fatalf("ConfigFromSettings rejected Go duration strings: %v", err)
+	}
+	if cfg.RetryStallTimeout != time.Minute ||
+		cfg.RetryHoldTimeout != 90*time.Second ||
+		cfg.RetryChainDeadline != 4*time.Minute {
+		t.Fatalf("compound durations parsed as %+v", cfg)
 	}
 }
