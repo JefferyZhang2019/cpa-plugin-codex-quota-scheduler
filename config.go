@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 
@@ -49,6 +50,20 @@ type Config struct {
 	CircuitHalfOpenSuccessThreshold int
 	MaxLogEntries                   int
 	LogRetention                    time.Duration
+
+	// Retry chain. RetryEnabled is the kill switch: when it is false every
+	// request keeps today's behavior. RetryChain is empty by default, which is
+	// also inert, so shipping the feature cannot change routing by itself.
+	RetryEnabled        bool            `json:"retry_enabled"`
+	RetryShadow         bool            `json:"retry_shadow"`
+	RetryMaxAttempts    int             `json:"retry_max_attempts"`
+	RetryStallTimeout   time.Duration   `json:"retry_stall_timeout"`
+	RetryHoldTimeout    time.Duration   `json:"retry_hold_timeout"`
+	RetryChainDeadline  time.Duration   `json:"retry_chain_deadline"`
+	RetryMaxFrames      int             `json:"retry_max_frames"`
+	RetryMaxBytes       int64           `json:"retry_max_bytes"`
+	RetryStripReasoning bool            `json:"retry_strip_reasoning"`
+	RetryChain          []RetryChainRow `json:"retry_chain,omitempty"`
 }
 
 type registration struct {
@@ -64,6 +79,16 @@ type registrationCapabilities struct {
 	RequestLifecyclePlugin bool `json:"request_lifecycle_plugin,omitempty"`
 	QuotaProvider          bool `json:"quota_provider,omitempty"`
 	StreamChunkInterceptor bool `json:"response_stream_interceptor,omitempty"`
+
+	// The retry chain is implemented as a model router plus a plugin executor.
+	// The router claims only models that have a configured chain, and the
+	// executor re-issues the request through the host so the built-in
+	// auth/scheduler path still selects the account.
+	ModelRouter           bool     `json:"model_router"`
+	Executor              bool     `json:"executor"`
+	ExecutorModelScope    string   `json:"executor_model_scope"`
+	ExecutorInputFormats  []string `json:"executor_input_formats"`
+	ExecutorOutputFormats []string `json:"executor_output_formats"`
 }
 
 type rawConfig struct {
@@ -86,6 +111,17 @@ type rawConfig struct {
 	CircuitHalfOpenSuccessThreshold *int   `yaml:"circuit_half_open_success_threshold"`
 	MaxLogEntries                   *int   `yaml:"max_log_entries"`
 	LogRetention                    string `yaml:"log_retention"`
+
+	RetryEnabled        *bool           `yaml:"retry_enabled"`
+	RetryShadow         *bool           `yaml:"retry_shadow"`
+	RetryMaxAttempts    *int            `yaml:"retry_max_attempts"`
+	RetryStallTimeout   string          `yaml:"retry_stall_timeout"`
+	RetryHoldTimeout    string          `yaml:"retry_hold_timeout"`
+	RetryChainDeadline  string          `yaml:"retry_chain_deadline"`
+	RetryMaxFrames      *int            `yaml:"retry_max_frames"`
+	RetryMaxBytes       string          `yaml:"retry_max_bytes"`
+	RetryStripReasoning *bool           `yaml:"retry_strip_reasoning"`
+	RetryChain          []RetryChainRow `yaml:"retry_chain"`
 }
 
 func DefaultConfig() Config {
@@ -108,6 +144,16 @@ func DefaultConfig() Config {
 		CircuitHalfOpenSuccessThreshold: 2,
 		MaxLogEntries:                   200,
 		LogRetention:                    24 * time.Hour,
+
+		RetryEnabled:        false,
+		RetryShadow:         false,
+		RetryMaxAttempts:    defaultRetryMaxAttempts,
+		RetryStallTimeout:   defaultRetryStallTimeout,
+		RetryHoldTimeout:    defaultRetryHoldTimeout,
+		RetryChainDeadline:  defaultRetryChainDeadline,
+		RetryMaxFrames:      defaultRetryMaxFrames,
+		RetryMaxBytes:       defaultRetryMaxBytes,
+		RetryStripReasoning: true,
 	}
 }
 
@@ -152,6 +198,28 @@ func NormalizeConfig(cfg Config) Config {
 	}
 	if cfg.LogRetention <= 0 {
 		cfg.LogRetention = defaults.LogRetention
+	}
+	cfg.RetryChain = NormalizeRetryChain(cfg.RetryChain)
+	if cfg.RetryMaxAttempts <= 0 {
+		cfg.RetryMaxAttempts = defaults.RetryMaxAttempts
+	}
+	if cfg.RetryMaxAttempts > maxRetryMaxAttempts {
+		cfg.RetryMaxAttempts = maxRetryMaxAttempts
+	}
+	if cfg.RetryStallTimeout <= 0 {
+		cfg.RetryStallTimeout = defaults.RetryStallTimeout
+	}
+	if cfg.RetryHoldTimeout <= 0 {
+		cfg.RetryHoldTimeout = defaults.RetryHoldTimeout
+	}
+	if cfg.RetryChainDeadline <= 0 {
+		cfg.RetryChainDeadline = defaults.RetryChainDeadline
+	}
+	if cfg.RetryMaxFrames <= 0 {
+		cfg.RetryMaxFrames = defaults.RetryMaxFrames
+	}
+	if cfg.RetryMaxBytes <= 0 {
+		cfg.RetryMaxBytes = defaults.RetryMaxBytes
 	}
 	return cfg
 }
@@ -291,7 +359,104 @@ func DecodeConfig(raw []byte) (Config, error) {
 		}
 		cfg.LogRetention = d
 	}
+	if decoded.RetryEnabled != nil {
+		cfg.RetryEnabled = *decoded.RetryEnabled
+	}
+	if decoded.RetryShadow != nil {
+		cfg.RetryShadow = *decoded.RetryShadow
+	}
+	if decoded.RetryMaxAttempts != nil {
+		if *decoded.RetryMaxAttempts <= 0 || *decoded.RetryMaxAttempts > maxRetryMaxAttempts {
+			return Config{}, fmt.Errorf("retry_max_attempts must be between 1 and %d", maxRetryMaxAttempts)
+		}
+		cfg.RetryMaxAttempts = *decoded.RetryMaxAttempts
+	}
+	for _, field := range []struct {
+		name  string
+		raw   string
+		apply func(time.Duration)
+	}{
+		{"retry_stall_timeout", decoded.RetryStallTimeout, func(d time.Duration) { cfg.RetryStallTimeout = d }},
+		{"retry_hold_timeout", decoded.RetryHoldTimeout, func(d time.Duration) { cfg.RetryHoldTimeout = d }},
+		{"retry_chain_deadline", decoded.RetryChainDeadline, func(d time.Duration) { cfg.RetryChainDeadline = d }},
+	} {
+		if field.raw == "" {
+			continue
+		}
+		d, err := time.ParseDuration(field.raw)
+		if err != nil {
+			return Config{}, fmt.Errorf("%s: %w", field.name, err)
+		}
+		if d <= 0 {
+			return Config{}, fmt.Errorf("%s must be positive", field.name)
+		}
+		field.apply(d)
+	}
+	if decoded.RetryMaxFrames != nil {
+		if *decoded.RetryMaxFrames <= 0 {
+			return Config{}, fmt.Errorf("retry_max_frames must be positive")
+		}
+		cfg.RetryMaxFrames = *decoded.RetryMaxFrames
+	}
+	if decoded.RetryMaxBytes != "" {
+		n, err := parseByteSize(decoded.RetryMaxBytes)
+		if err != nil {
+			return Config{}, fmt.Errorf("retry_max_bytes: %w", err)
+		}
+		cfg.RetryMaxBytes = n
+	}
+	if decoded.RetryStripReasoning != nil {
+		cfg.RetryStripReasoning = *decoded.RetryStripReasoning
+	}
+	if decoded.RetryChain != nil {
+		chain := NormalizeRetryChain(decoded.RetryChain)
+		if err := validateRetryChain(chain); err != nil {
+			return Config{}, err
+		}
+		cfg.RetryChain = chain
+	}
 	return NormalizeConfig(cfg), nil
+}
+
+// parseByteSize accepts "8388608" or a suffixed size such as "8MB" or "1.5GiB".
+func parseByteSize(raw string) (int64, error) {
+	trimmed := strings.TrimSpace(raw)
+	if trimmed == "" {
+		return 0, fmt.Errorf("size must not be empty")
+	}
+	multiplier := int64(1)
+	upper := strings.ToUpper(trimmed)
+	// KB/MB/GB are binary here so a value the settings page renders round-trips
+	// through parse unchanged. formatByteSize writes binary magnitudes under
+	// those suffixes, and a decimal reading would shrink the budget on every
+	// save.
+	for _, unit := range []struct {
+		suffix string
+		factor int64
+	}{
+		{"KIB", 1024},
+		{"MIB", 1024 * 1024},
+		{"GIB", 1024 * 1024 * 1024},
+		{"KB", 1024},
+		{"MB", 1024 * 1024},
+		{"GB", 1024 * 1024 * 1024},
+		{"B", 1},
+	} {
+		if strings.HasSuffix(upper, unit.suffix) {
+			multiplier = unit.factor
+			trimmed = strings.TrimSpace(trimmed[:len(trimmed)-len(unit.suffix)])
+			break
+		}
+	}
+	value, err := strconv.ParseFloat(trimmed, 64)
+	if err != nil {
+		return 0, err
+	}
+	size := int64(value * float64(multiplier))
+	if size <= 0 {
+		return 0, fmt.Errorf("size must be positive")
+	}
+	return size, nil
 }
 
 func normalizeRetryDelays(values, fallback []time.Duration) []time.Duration {
@@ -358,6 +523,12 @@ func PluginRegistration() registration {
 			RequestLifecyclePlugin: true,
 			QuotaProvider:          true,
 			StreamChunkInterceptor: true,
+
+			ModelRouter:           true,
+			Executor:              true,
+			ExecutorModelScope:    "static",
+			ExecutorInputFormats:  append([]string(nil), retryChainInputFormats...),
+			ExecutorOutputFormats: append([]string(nil), retryChainInputFormats...),
 		},
 	}
 }

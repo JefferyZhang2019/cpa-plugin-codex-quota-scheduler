@@ -9,6 +9,7 @@ import (
 	"html/template"
 	"net/http"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -98,6 +99,20 @@ type SettingsPayload struct {
 	CircuitHalfOpenSuccessThreshold int         `json:"circuit_half_open_success_threshold"`
 	MaxLogEntries                   int         `json:"max_log_entries"`
 	LogRetention                    string      `json:"log_retention"`
+
+	// Retry chain. Every field is inert until RetryEnabled is on and the chain
+	// has at least one row, so a saved payload that omits them keeps today's
+	// routing.
+	RetryEnabled        bool            `json:"retry_enabled"`
+	RetryShadow         bool            `json:"retry_shadow"`
+	RetryMaxAttempts    int             `json:"retry_max_attempts"`
+	RetryStallTimeout   string          `json:"retry_stall_timeout"`
+	RetryHoldTimeout    string          `json:"retry_hold_timeout"`
+	RetryChainDeadline  string          `json:"retry_chain_deadline"`
+	RetryMaxFrames      int             `json:"retry_max_frames"`
+	RetryMaxBytes       string          `json:"retry_max_bytes"`
+	RetryStripReasoning bool            `json:"retry_strip_reasoning"`
+	RetryChain          []RetryChainRow `json:"retry_chain"`
 }
 
 type StatusAccount struct {
@@ -199,6 +214,7 @@ func RegisterManagement() pluginapi.ManagementRegistrationResponse {
 			{Method: http.MethodPatch, Path: managementBasePath + "/annotations/account", Description: "Update one account annotation."},
 			{Method: http.MethodPatch, Path: managementBasePath + "/annotations/group", Description: "Update one group annotation."},
 			{Method: http.MethodPost, Path: managementBasePath + "/credentials/resolve", Description: "Resolve an active credential ambiguity."},
+			{Method: http.MethodGet, Path: managementBasePath + "/retry/status", Description: "Retry chain counters and attempt history."},
 		},
 	}
 }
@@ -239,6 +255,8 @@ func handleManagementRequest(store *PluginState, req pluginapi.ManagementRequest
 		return handleRefreshAccountRequest(store, req, now)
 	case method == http.MethodGet && path == "/logs":
 		return jsonManagementResponse(http.StatusOK, map[string]any{"logs": store.Snapshot(now).Logs})
+	case method == http.MethodGet && path == "/retry/status":
+		return jsonManagementResponse(http.StatusOK, retryStatusSnapshot(store.Config()))
 	case method == http.MethodGet && path == "/export":
 		return handleExportState(store, now)
 	case method == http.MethodPost && path == "/import":
@@ -319,6 +337,45 @@ func SettingsFromConfig(cfg Config) SettingsPayload {
 		CircuitHalfOpenSuccessThreshold: cfg.CircuitHalfOpenSuccessThreshold,
 		MaxLogEntries:                   cfg.MaxLogEntries,
 		LogRetention:                    cfg.LogRetention.String(),
+		RetryEnabled:                    cfg.RetryEnabled,
+		RetryShadow:                     cfg.RetryShadow,
+		RetryMaxAttempts:                cfg.RetryMaxAttempts,
+		RetryStallTimeout:               cfg.RetryStallTimeout.String(),
+		RetryHoldTimeout:                cfg.RetryHoldTimeout.String(),
+		RetryChainDeadline:              cfg.RetryChainDeadline.String(),
+		RetryMaxFrames:                  cfg.RetryMaxFrames,
+		RetryMaxBytes:                   formatByteSize(cfg.RetryMaxBytes),
+		RetryStripReasoning:             cfg.RetryStripReasoning,
+		RetryChain:                      normalizedRetryChainPayload(cfg.RetryChain),
+	}
+}
+
+// normalizedRetryChainPayload keeps the API payload stable for an unset chain,
+// so the page can tell "no chain" from "not reported" and render an empty list
+// rather than a null.
+func normalizedRetryChainPayload(rows []RetryChainRow) []RetryChainRow {
+	normalized := NormalizeRetryChain(rows)
+	if normalized == nil {
+		return []RetryChainRow{}
+	}
+	return normalized
+}
+
+func formatByteSize(size int64) string {
+	if size <= 0 {
+		return "0"
+	}
+	const (
+		mib = int64(1) << 20
+		kib = int64(1) << 10
+	)
+	switch {
+	case size%mib == 0:
+		return strconv.FormatInt(size/mib, 10) + "MB"
+	case size%kib == 0:
+		return strconv.FormatInt(size/kib, 10) + "KB"
+	default:
+		return strconv.FormatInt(size, 10) + "B"
 	}
 }
 
@@ -403,6 +460,50 @@ func ConfigFromSettings(base Config, payload SettingsPayload) (Config, error) {
 			return Config{}, jsonError("log_retention must be a positive duration")
 		}
 		cfg.LogRetention = d
+	}
+	cfg.RetryEnabled = payload.RetryEnabled
+	cfg.RetryShadow = payload.RetryShadow
+	cfg.RetryStripReasoning = payload.RetryStripReasoning
+	if payload.RetryMaxAttempts > 0 {
+		if payload.RetryMaxAttempts > maxRetryMaxAttempts {
+			return Config{}, jsonError("retry_max_attempts must be between 1 and " + strconv.Itoa(maxRetryMaxAttempts))
+		}
+		cfg.RetryMaxAttempts = payload.RetryMaxAttempts
+	}
+	for _, field := range []struct {
+		name  string
+		raw   string
+		apply func(time.Duration)
+	}{
+		{"retry_stall_timeout", payload.RetryStallTimeout, func(d time.Duration) { cfg.RetryStallTimeout = d }},
+		{"retry_hold_timeout", payload.RetryHoldTimeout, func(d time.Duration) { cfg.RetryHoldTimeout = d }},
+		{"retry_chain_deadline", payload.RetryChainDeadline, func(d time.Duration) { cfg.RetryChainDeadline = d }},
+	} {
+		if field.raw == "" {
+			continue
+		}
+		d, err := time.ParseDuration(field.raw)
+		if err != nil || d <= 0 {
+			return Config{}, jsonError(field.name + " must be a positive duration")
+		}
+		field.apply(d)
+	}
+	if payload.RetryMaxFrames > 0 {
+		cfg.RetryMaxFrames = payload.RetryMaxFrames
+	}
+	if strings.TrimSpace(payload.RetryMaxBytes) != "" {
+		size, err := parseByteSize(payload.RetryMaxBytes)
+		if err != nil {
+			return Config{}, jsonError("retry_max_bytes must be a positive size such as 8MB")
+		}
+		cfg.RetryMaxBytes = size
+	}
+	if payload.RetryChain != nil {
+		chain := NormalizeRetryChain(payload.RetryChain)
+		if err := validateRetryChain(chain); err != nil {
+			return Config{}, jsonError(err.Error())
+		}
+		cfg.RetryChain = chain
 	}
 	return NormalizeConfig(cfg), nil
 }
@@ -1239,6 +1340,20 @@ var statusTemplateV2 = template.Must(template.New("status-v2").Funcs(template.Fu
 .warning{margin-top:14px;border:1px solid #fbbf24;background:#fffbeb;color:#78350f;border-radius:7px;padding:10px 11px;font-size:12px;line-height:1.45}.warning strong{display:block;color:#92400e;font-size:13px;margin-bottom:3px}
 *{box-sizing:border-box}body{font-family:system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;margin:0;color:#1f2937;background:#f6f7f9}button,input,select,textarea{font:inherit}button{border:0;border-radius:7px;padding:9px 12px;background:#2563eb;color:#fff;cursor:pointer;font-weight:650}button.secondary{background:#eef2ff;color:#1e40af}button.ghost{background:#f3f4f6;color:#374151}button:disabled{opacity:.55;cursor:not-allowed}[hidden]{display:none!important}code{font-family:ui-monospace,SFMono-Regular,Consolas,monospace;font-size:12px}.shell{display:grid;grid-template-columns:310px minmax(0,1fr);min-height:100vh}.sidebar{background:#fff;border-right:1px solid #e5e7eb;padding:18px;position:sticky;top:0;height:100vh;overflow:auto}.main{padding:20px 22px 32px;overflow:auto}.brand{display:grid;gap:5px;margin-bottom:18px}.brand h1{font-size:20px;line-height:1.2;margin:0;color:#111827}.brand p{font-size:12px;line-height:1.45;color:#6b7280;margin:0}.section{border-top:1px solid #eef0f3;padding-top:16px;margin-top:16px}.section h2{font-size:14px;margin:0 0 12px;color:#111827}.collapsible summary{cursor:pointer;list-style:none;display:flex;align-items:flex-start;gap:8px}.collapsible summary::-webkit-details-marker{display:none}.summary-toggle{display:inline-flex;align-items:center;justify-content:center;width:18px;height:18px;border-radius:999px;background:#eef2ff;color:#1e40af;font-weight:750;line-height:1;transition:transform .16s ease}.collapsible[open] .summary-toggle{transform:rotate(90deg)}.summary-text{display:grid;gap:3px}.summary-title{font-size:14px;font-weight:750;color:#111827}.summary-subtitle{font-size:12px;line-height:1.35;color:#6b7280}.collapsible-body{padding-top:14px}.primary-actions{margin-top:12px}.field{display:grid;gap:6px;margin-bottom:12px}.field span{font-size:12px;color:#4b5563;font-weight:650}.field input,.field select,.field textarea{width:100%;border:1px solid #d1d5db;border-radius:7px;background:#fff;color:#111827;padding:8px 10px}.field textarea{min-height:84px;resize:vertical}.toggle{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:12px}.toggle span{font-size:13px;font-weight:650}.setting-with-help{margin-bottom:12px}.setting-with-help .toggle{margin-bottom:4px}.setting-help{margin:0;color:#6b7280;font-size:12px;line-height:1.45}.actions{display:flex;gap:8px;flex-wrap:wrap}.notice{margin-top:12px;border-radius:7px;padding:10px 11px;background:#ecfdf5;color:#065f46;font-size:12px;line-height:1.45}.notice.error{background:#fef2f2;color:#991b1b}.staticHint{background:#eff6ff;color:#1e3a8a}.toolbar{display:flex;align-items:flex-start;justify-content:space-between;gap:16px;margin-bottom:18px}.toolbar h2{font-size:22px;margin:0;color:#111827}.toolbar p{font-size:13px;color:#6b7280;margin:5px 0 0}.metrics{display:flex;gap:8px;flex-wrap:wrap;justify-content:flex-end}.metric{border:1px solid #e5e7eb;background:#fff;border-radius:7px;padding:8px 10px;font-size:12px;color:#374151}.queue{display:grid;grid-template-columns:repeat(auto-fill,minmax(310px,1fr));gap:12px}.card{background:#fff;border:1px solid #e5e7eb;border-radius:8px;padding:14px;display:grid;gap:12px;box-shadow:0 1px 2px rgba(15,23,42,.04)}.card.next{border-color:#2563eb;box-shadow:0 0 0 1px rgba(37,99,235,.18),0 8px 24px rgba(37,99,235,.08)}.cardTop{display:flex;align-items:flex-start;justify-content:space-between;gap:10px}.rank{display:inline-flex;align-items:center;justify-content:center;min-width:30px;height:30px;border-radius:7px;background:#111827;color:#fff;font-weight:750;font-size:13px}.identity{min-width:0;display:grid;gap:5px}.titleLine{display:flex;align-items:center;gap:7px;flex-wrap:wrap}.title{font-weight:750;color:#111827;overflow-wrap:anywhere}.groupPill{border-radius:999px;background:#f0fdf4;color:#166534;padding:3px 7px;font-size:11px}.sub{font-size:12px;color:#6b7280;overflow-wrap:anywhere}.badges{display:flex;gap:6px;flex-wrap:wrap}.badge{border-radius:999px;background:#f3f4f6;color:#374151;padding:4px 8px;font-size:12px}.badge.ok{background:#dcfce7;color:#166534}.badge.no{background:#fee2e2;color:#991b1b}.badge.next{background:#dbeafe;color:#1d4ed8}.kv{display:grid;grid-template-columns:88px minmax(0,1fr);gap:6px 10px;font-size:12px}.kv span:nth-child(odd){color:#6b7280}.kv span:nth-child(even){color:#111827;overflow-wrap:anywhere}.chips{display:flex;gap:6px;flex-wrap:wrap;min-height:24px}.chip{border-radius:999px;background:#eef2ff;color:#3730a3;padding:4px 8px;font-size:12px}.quotaList{display:grid;gap:10px}.quota-row{display:grid;gap:5px}.quota-head{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:8px;font-size:12px;color:#374151}.quota-title{font-weight:650;color:#111827}.quota-reset{grid-column:1/-1;color:#6b7280}.localTime{color:#374151}.quota-bar{height:8px;border-radius:999px;background:#e5e7eb;overflow:hidden}.quota-fill{height:100%;border-radius:999px;background:#2f7d5f}.quota-fill.warn{background:#b7791f}.quota-fill.danger{background:#dc2626}.metaLine{display:flex;gap:6px;flex-wrap:wrap}.noteBlock{font-size:12px;line-height:1.45;color:#4b5563;background:#f9fafb;border-radius:7px;padding:8px 9px;display:grid;gap:3px}.cardActions{display:flex;justify-content:flex-end;gap:8px}.pinAccount{display:inline-flex;align-items:center;justify-content:center;padding:9px;color:#6b7280}.pinAccount.pinned{background:#dbeafe;color:#2563eb}.pinAccount svg{width:18px;height:18px;fill:currentColor}.empty{background:#fff;border:1px dashed #d1d5db;border-radius:8px;padding:28px;text-align:center;color:#6b7280}.logs{margin-top:20px;background:#fff;border:1px solid #e5e7eb;border-radius:8px;padding:14px}.logsHeader{display:flex;justify-content:space-between;align-items:center;gap:12px;margin-bottom:10px}.logsHeader h2{font-size:16px;margin:0}.logList{display:grid;gap:8px;max-height:260px;overflow:auto}.logItem{border-left:3px solid #d1d5db;padding:7px 9px;background:#f9fafb;border-radius:0 7px 7px 0}.logItem.info{border-left-color:#2563eb}.logItem.warn{border-left-color:#b7791f}.logItem.error{border-left-color:#dc2626}.logMeta{font-size:11px;color:#6b7280;margin-bottom:3px}.logMsg{font-size:12px;color:#111827;line-height:1.45}dialog{border:0;border-radius:8px;padding:0;width:min(560px,calc(100vw - 28px));box-shadow:0 24px 64px rgba(15,23,42,.28)}dialog::backdrop{background:rgba(15,23,42,.38)}.dialogBody{padding:18px}.dialogHead{display:flex;justify-content:space-between;gap:12px;align-items:flex-start;margin-bottom:14px}.dialogHead h2{font-size:18px;margin:0;color:#111827}.dialogHead p{font-size:12px;color:#6b7280;margin:4px 0 0}.dialogGrid{display:grid;grid-template-columns:1fr 1fr;gap:10px}.dialogGrid .wide{grid-column:1/-1}.dialogActions{display:flex;justify-content:flex-end;gap:8px;margin-top:14px}@media(max-width:860px){.shell{grid-template-columns:1fr}.sidebar{height:auto;position:relative;border-right:0;border-bottom:1px solid #e5e7eb}.toolbar{display:grid}.metrics{justify-content:flex-start}.dialogGrid{grid-template-columns:1fr}}
 .quota-fill.warn{background:#f59e0b}
+.retryChainHead{display:flex;align-items:center;justify-content:space-between;gap:12px;margin:6px 0 8px}.retryChainHead h3{margin:0;font-size:15px;color:#111827}
+.retryChainRow{border:1px solid #e5e7eb;border-radius:8px;padding:12px;margin-bottom:10px;background:#fbfbfd;display:grid;gap:10px}
+.retryChainRowHead{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:10px;align-items:end}.retryChainRowHead .field{margin-bottom:0}
+.retryRowActions{display:flex;gap:8px;flex-wrap:wrap}
+.retryFallbacks{display:grid;gap:8px}
+.retryFallback{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr) auto;gap:10px;align-items:end;border-top:1px dashed #e5e7eb;padding-top:8px}
+.retryFallback .field{margin-bottom:0}
+.retryEmpty{border:1px dashed #d1d5db;border-radius:8px;padding:14px;color:#6b7280;font-size:12px}
+.retryStats{display:flex;gap:8px;flex-wrap:wrap;margin-top:16px}
+.retryStat{border:1px solid #e5e7eb;background:#fff;border-radius:7px;padding:8px 10px;font-size:12px;display:grid;gap:3px;min-width:96px}
+.retryStatLabel{color:#6b7280}.retryStatValue{font-weight:700;color:#111827;font-size:15px}
+.retryChainSummary{border:1px solid #e5e7eb;background:#fff;border-radius:7px;padding:8px 10px;font-size:12px;color:#374151;display:grid;gap:4px;flex-basis:100%}
+.retryChainSummaryTitle{font-weight:650;color:#111827}
+.retryChainLine{font-family:ui-monospace,SFMono-Regular,Consolas,monospace;overflow-wrap:anywhere}
 </style>
 </head>
 <body>
@@ -1271,6 +1386,27 @@ var statusTemplateV2 = template.Must(template.New("status-v2").Funcs(template.Fu
 <label class="field"><span data-i18n="settings.logRetention">日志保留时间</span><input id="logRetention" spellcheck="false"></label>
 <div class="actions"><button id="saveSettings" type="button" data-i18n="actions.saveSettings">保存设置</button><button id="exportConfig" type="button" class="ghost" data-i18n="actions.exportConfig">导出配置</button><button id="importConfig" type="button" class="ghost" data-i18n="actions.importConfig">导入配置</button><input id="importFile" type="file" accept="application/json,.json" hidden></div>
 </div></details>
+<details class="section collapsible" id="retryPanelWrap"><summary><span class="summary-toggle" aria-hidden="true">&gt;</span><span class="summary-text"><span class="summary-title" data-i18n="retry.title">模型重试链</span><span class="summary-subtitle" data-i18n="retry.summary">上游在内容尚未发给客户端之前返回容量不足、超载或 429/502/503 时，自动改用链中的下一个模型重试。</span></span></summary><div class="collapsible-body" id="retryPanel">
+<label class="toggle"><span data-i18n="retry.enabled">启用模型重试链</span><input id="retryEnabled" type="checkbox"></label>
+<label class="toggle"><span data-i18n="retry.shadow">影子模式（只记录会重试的情况，不真正重试）</span><input id="retryShadow" type="checkbox"></label>
+<div class="setting-with-help"><p class="setting-help" data-i18n="retry.shadowHelp">影子模式按今天的路径原样转发，只把「本应重试」的请求写入下面的记录，用于先观察再启用。</p></div>
+<div class="retryChainHead"><h3 data-i18n="retry.chainTitle">重试链</h3><div class="actions"><button id="retryAddRow" type="button" class="ghost" data-i18n="retry.addRow">添加模型</button><button id="retryReloadCatalog" type="button" class="ghost" data-i18n="retry.reloadCatalog">载入模型列表</button></div></div>
+<p class="setting-help" data-i18n="retry.chainHelp">左列是客户端请求的模型；右侧按顺序填备用目标。提供方留空时由 CPA 自动选择，填写时使用 CPA 的提供方键，例如 codex、openai、openai-compatible-zed2api。只对开启了「启用模型重试链」且出现在这里的模型生效。</p>
+<div id="retryChainEditor"></div>
+<p class="setting-help" id="retryCatalogStatus"></p>
+<label class="field"><span data-i18n="retry.maxAttempts">最大尝试次数（含首次）</span><input id="retryMaxAttempts" type="number" min="1" max="16" step="1"></label>
+<label class="field"><span data-i18n="retry.maxFrames">保留帧上限</span><input id="retryMaxFrames" type="number" min="1" step="1"></label>
+<label class="field"><span data-i18n="retry.stallTimeout">单次静默超时</span><input id="retryStallTimeout" spellcheck="false"></label>
+<label class="field"><span data-i18n="retry.holdTimeout">等待可提交内容上限</span><input id="retryHoldTimeout" spellcheck="false"></label>
+<label class="field"><span data-i18n="retry.chainDeadline">整条链总时限</span><input id="retryChainDeadline" spellcheck="false"></label>
+<label class="field"><span data-i18n="retry.maxBytes">保留字节上限</span><input id="retryMaxBytes" spellcheck="false"></label>
+<div class="setting-with-help"><label class="toggle"><span data-i18n="retry.stripReasoning">切换模型时移除加密推理内容</span><input id="retryStripReasoning" type="checkbox"></label><p class="setting-help" data-i18n="retry.stripReasoningHelp">Codex 的加密推理条目由原模型签名，换模型后无法验证。保留开启可以避免换模型后请求被上游拒绝。</p></div>
+<div class="actions"><button id="retrySave" type="button" data-i18n="actions.saveSettings">保存设置</button><button id="retryRefreshStats" type="button" class="ghost" data-i18n="retry.refreshStats">刷新记录</button></div>
+<div id="retryStats" class="retryStats"></div>
+<div id="retryEvents" class="logList"></div>
+<datalist id="retryProviderOptions"></datalist>
+<datalist id="retryModelOptions"></datalist>
+</div></details>
 <div id="notice" class="notice" hidden></div>
 </aside>
 <main class="main" id="protectedMain" hidden>
@@ -1295,6 +1431,7 @@ const LOCALE_STORAGE_KEY='codex-quota-scheduler-locale-v1';
 const MANAGEMENT_KEY_STORAGE_KEY='codex-quota-scheduler-management-key-v1';
 const TRANSLATIONS={
   en:{
+    'nav.retry':'Retry Chain','retry.title':'Model Retry Chain','retry.summary':'When an upstream reports capacity, overload, or 429/502/503 before any content reached the client, the request is retried against the next model in the chain.','retry.enabled':'Enable model retry chain','retry.shadow':'Shadow mode (record only, never retry)','retry.shadowHelp':'Shadow mode forwards every frame exactly as today and only records the requests a live chain would have retried, so you can watch it before enabling.','retry.chainTitle':'Retry chain','retry.chainHelp':'The left column is the model the client asks for; list the fallback targets in order on the right. Leave the provider empty to let CPA choose it, or use a CPA provider key such as codex, openai, or openai-compatible-zed2api. Only listed models with the chain enabled are affected.','retry.addRow':'Add model','retry.reloadCatalog':'Load model list','retry.rowModel':'Requested model','retry.provider':'Provider (optional)','retry.fallback':'Fallback','retry.addFallback':'Add fallback','retry.removeRow':'Remove model','retry.remove':'Remove','retry.maxAttempts':'Maximum attempts (including the first)','retry.stallTimeout':'Per-attempt silence timeout','retry.holdTimeout':'Hold budget before first commit','retry.chainDeadline':'Whole-chain deadline','retry.maxFrames':'Buffered frame limit','retry.maxBytes':'Buffered byte limit','retry.stripReasoning':'Drop encrypted reasoning when the model changes','retry.stripReasoningHelp':'Codex encrypted reasoning items are signed by the original model and cannot be verified by another one. Leaving this on avoids upstream rejections after a model switch.','retry.refreshStats':'Refresh records','retry.catalogLoading':'Loading provider and model list...','retry.catalogLoaded':'Provider and model list loaded.','retry.catalogFailed':'Could not load the provider and model list; type the values manually.','retry.catalogEmpty':'No providers reported; type the values manually.','retry.chainEmpty':'No retry chain configured. Add a model to start.','retry.statsTitle':'Retry records','retry.eventsTitle':'Recent attempts','retry.mode':'Mode','retry.modeOff':'Off','retry.modeLive':'Live','retry.modeShadow':'Shadow','retry.requests':'Requests','retry.retries':'Retries','retry.succeeded':'Succeeded','retry.failed':'Failed','retry.shadowHits':'Would have retried','retry.noEvents':'No retry activity recorded yet.','retry.attempt':'Attempt','retry.outcome':'Outcome','retry.invalidRow':'Every chain row needs a model and at least one fallback with a model.','retry.error.attempts':'Maximum attempts must be between 1 and 16.','retry.error.frames':'Buffered frame limit must be a whole number of at least 1.','retry.error.size':'Buffered byte limit must be a positive size such as 8MB.','retry.error.duration':'Timeouts must be positive durations such as 60s, 90s, or 240s.','notice.retrySaved':'Retry chain saved.',
     'app.title':'Codex Quota Scheduler','app.subtitle':'Optimized Fill First scheduling. Configuration, aliases, groups, tags, and notes are saved in the plugin state file.','app.language':'Language','connection.managementKey':'CPA management key','connection.rememberManagementKey':'Remember management key in this browser','connection.rememberManagementKeyHelp':'The key will be stored unencrypted in browser local storage. Enable this only on a trusted device.','connection.backgroundHint':'Once the scheduler is enabled, it runs in the background. This page does not need to stay open.',
     'resetProbe.warningTitle':'Automatic reset probe is off by default','resetProbe.warningBody':'Only after you check the box will the scheduler send one tiny Codex request when a reset looks lazy, nudging the next quota window to start.',
     'settings.title':'Scheduler Settings','settings.summary':'Default configuration is ready; normally no manual changes are needed.','settings.handleEnabled':'Enable scheduler takeover','settings.usageFeedback':'Mark quota exhausted from failure feedback','settings.enableResetProbe':'Enable automatic reset probe','settings.enableResetProbeHelp':'Probe performs read-only checks at the quota refresh interval with a 30-minute minimum, even while normal refresh is dormant, and sends one tiny request only after detecting a lazy reset window. This may consume a small amount of quota.','settings.provisionalProbe':'Allow quota probes when the account roster is unconfirmed (high risk)','settings.provisionalProbeHelp':'When CPA temporarily cannot confirm the current accounts and priorities, allow the plugin to use the most recently saved account roster for quota reset probes. Account credentials are revalidated every time, but the plugin still cannot guarantee that accounts have not been removed or reprioritized. This should normally remain off.','settings.monthlyMode':'Monthly mode','settings.expiryOrder':'Sort by expiry time','settings.monthlyPriority':'Prefer Monthly','settings.refreshInterval':'Quota refresh interval','settings.staleAfter':'Stale cache threshold','settings.refreshActiveWindow':'Refresh active window','settings.refreshAfterResetDelay':'Refresh after reset delay','settings.refreshRetryDelays':'Refresh retry delays','settings.refreshOnStartup':'Refresh on startup','settings.maxConcurrency':'Max refresh concurrency','settings.circuitFailureThreshold':'Circuit failure threshold','settings.circuitOpenDuration':'Circuit open duration','settings.circuitHalfOpenSuccessThreshold':'Half-open recovery successes','settings.maxLogEntries':'Max log entries','settings.logRetention':'Log retention',
@@ -1306,6 +1443,7 @@ const TRANSLATIONS={
     'log.ui.refresh_requested':'UI requested quota refresh','log.ui.settings_saved':'UI saved scheduler settings','log.ui.refresh_one_requested':'UI requested one account quota refresh','log.ui.config_exported':'UI exported plugin configuration','log.ui.config_imported':'UI imported plugin configuration','log.ui.account_saved':'UI saved account card','log.ui.group_saved':'UI saved account group','log.scheduler.selected':'Request handled by plugin','log.scheduler.fallback':'Plugin delegated to the built-in scheduler','log.scheduler.unhandled':'Request was not handled by the plugin','log.scheduler.handled':'Plugin handled the request without selecting an account','log.quota.refresh_success':'Account quota refreshed successfully','log.quota.refresh_failed':'Account quota refresh failed','log.quota.refresh_one_failed':'Single-account quota refresh failed','log.quota.refresh_requested':'Background quota refresh requested','log.quota.refresh_one_requested':'Single-account quota refresh requested','log.quota.temporary_exhausted':'Account quota exhausted; waiting for reset','log.quota.temporary_recovered':'Manual refresh verified recovery; temporary exhaustion cleared','log.quota.manual_refresh_override':'Manual refresh overrode the host-side disabled/unavailable flag','log.circuit.success':'Successful request updated the circuit state','log.probe.precheck_started':'Checking a suspected lazy quota window','log.probe.activation_sent':'Tiny activation request sent','log.probe.verified':'Quota-window activation verified','log.probe.failed':'Quota-window probe failed and was handled safely'
   },
   'zh-CN':{
+    'nav.retry':'模型重试链','retry.title':'模型重试链','retry.summary':'上游在内容尚未发给客户端之前返回容量不足、超载或 429/502/503 时，自动改用链中的下一个模型重试。','retry.enabled':'启用模型重试链','retry.shadow':'影子模式（只记录，不真正重试）','retry.shadowHelp':'影子模式完全按现有路径转发，只把「本应重试」的请求写入下面的记录，便于先观察再启用。','retry.chainTitle':'重试链','retry.chainHelp':'左列是客户端请求的模型；右侧按顺序填备用目标。提供方留空时由 CPA 自动选择，填写时使用 CPA 的提供方键，例如 codex、openai、openai-compatible-zed2api。只对开启了「启用模型重试链」且出现在这里的模型生效。','retry.addRow':'添加模型','retry.reloadCatalog':'载入模型列表','retry.rowModel':'请求的模型','retry.provider':'提供方（可留空）','retry.fallback':'备用目标','retry.addFallback':'添加备用','retry.removeRow':'删除该模型','retry.remove':'删除','retry.maxAttempts':'最大尝试次数（含首次）','retry.stallTimeout':'单次静默超时','retry.holdTimeout':'等待可提交内容上限','retry.chainDeadline':'整条链总时限','retry.maxFrames':'保留帧上限','retry.maxBytes':'保留字节上限','retry.stripReasoning':'切换模型时移除加密推理内容','retry.stripReasoningHelp':'Codex 的加密推理条目由原模型签名，换模型后无法验证。保留开启可以避免换模型后请求被上游拒绝。','retry.refreshStats':'刷新记录','retry.catalogLoading':'正在载入提供方与模型列表…','retry.catalogLoaded':'已载入提供方与模型列表。','retry.catalogFailed':'无法载入提供方与模型列表，请手动填写。','retry.catalogEmpty':'没有读到提供方，请手动填写。','retry.chainEmpty':'尚未配置重试链。添加一个模型即可开始。','retry.statsTitle':'重试记录','retry.eventsTitle':'最近尝试','retry.mode':'模式','retry.modeOff':'关闭','retry.modeLive':'生效','retry.modeShadow':'影子','retry.requests':'请求数','retry.retries':'重试次数','retry.succeeded':'成功','retry.failed':'失败','retry.shadowHits':'本应重试','retry.noEvents':'暂无重试记录。','retry.attempt':'尝试','retry.outcome':'结果','retry.invalidRow':'每个模型至少要有一个填了模型的备用目标。','retry.error.attempts':'最大尝试次数必须在 1 到 16 之间。','retry.error.frames':'保留帧上限必须是至少为 1 的整数。','retry.error.size':'保留字节上限必须是正数，例如 8MB。','retry.error.duration':'超时必须是正的时间段，例如 60s、90s 或 240s。','notice.retrySaved':'重试链已保存。',
     'app.title':'Codex 额度调度器','app.subtitle':'优化版 Fill First。配置、别名、分组、标签和备注由插件内部状态文件保存。','app.language':'界面语言','connection.managementKey':'CPA 管理密钥','connection.rememberManagementKey':'在此浏览器中记住管理密钥','connection.rememberManagementKeyHelp':'密钥将以未加密形式保存在浏览器本地存储中。请仅在受信任的设备上启用。','connection.backgroundHint':'只要调度器启动了，它就会在后台自动运行，无需保持页面开启。',
     'resetProbe.warningTitle':'自动激活新的额度周期默认关闭','resetProbe.warningBody':'开启后，调度器会在额度重置时间已到但新周期尚未生成时，发送一次极小的 Codex 请求尝试激活新周期。',
     'settings.title':'调度设置','settings.summary':'默认配置已经都设置好了，正常情况下不需要手动设置。','settings.handleEnabled':'启用调度接管','settings.usageFeedback':'失败反馈标记额度耗尽','settings.enableResetProbe':'自动激活新的额度周期','settings.enableResetProbeHelp':'即使普通刷新处于休眠状态，Probe 也会按额度刷新间隔执行只读检查，最短 30 分钟；只有检测到延迟启动的重置窗口时，才发送一次极小请求。可能消耗少量额度。','settings.provisionalProbe':'账号列表未确认时仍允许额度探测（高风险）','settings.provisionalProbeHelp':'CPA 暂时无法确认当前账号及优先级时，允许插件使用最近一次保存的账号列表执行额度重置探测。每次都会重新验证账号凭据，但仍无法保证账号未被删除或调整优先级。通常应保持关闭。','settings.monthlyMode':'月度账号使用方式','settings.expiryOrder':'按到期时间排序','settings.monthlyPriority':'优先使用月度账号','settings.refreshInterval':'额度刷新间隔','settings.staleAfter':'缓存过期判定','settings.refreshActiveWindow':'活跃刷新窗口','settings.refreshAfterResetDelay':'重置后刷新延迟','settings.refreshRetryDelays':'刷新失败重试间隔','settings.refreshOnStartup':'启动时刷新额度','settings.maxConcurrency':'最大并发刷新','settings.circuitFailureThreshold':'熔断失败阈值','settings.circuitOpenDuration':'熔断等待时间','settings.circuitHalfOpenSuccessThreshold':'半开恢复成功次数','settings.maxLogEntries':'最大日志条数','settings.logRetention':'日志保留时间',
@@ -1320,13 +1458,43 @@ const notice=document.getElementById('notice');
 const editDialog=document.getElementById('editDialog');
 const localeSelect=document.getElementById('localeSelect');
 const settingsPanel=document.getElementById('settingsPanel');
+const retryPanel=document.getElementById('retryPanel');
+const retryChainEditor=document.getElementById('retryChainEditor');
 const accountsByID=new Map();
+function retryElement(id){return document.getElementById(id)||document.createElement('input')}
+function retryTextValue(id,fallback){const node=document.getElementById(id);const raw=node?String(node.value||'').trim():'';return raw||fallback||''}
+function retryIntValue(id,fallback){const node=document.getElementById(id);const parsed=Number.parseInt(node?node.value:'',10);return Number.isFinite(parsed)&&parsed>0?parsed:fallback}
+function collectRetryChainRows(){const rows=[];if(!retryChainEditor)return rows;for(const rowNode of retryChainEditor.querySelectorAll('[data-retry-row]')){const modelInput=rowNode.querySelector('[data-retry-model]');const model=modelInput?String(modelInput.value||'').trim():'';if(!model)continue;const fallbacks=[];for(const fallbackNode of rowNode.querySelectorAll('[data-retry-fallback]')){const providerInput=fallbackNode.querySelector('[data-retry-provider]');const fallbackModelInput=fallbackNode.querySelector('[data-retry-fallback-model]');const fallbackModel=fallbackModelInput?String(fallbackModelInput.value||'').trim():'';if(!fallbackModel)continue;fallbacks.push({provider:providerInput?String(providerInput.value||'').trim():'',model:fallbackModel})}rows.push({model:model,fallbacks:fallbacks})}return rows}
+function retryOptionNode(value){const option=document.createElement('option');option.value=value;return option}
+function addRetryChainRow(){if(!retryChainEditor)return;retryClearEmptyState();retryChainEditor.append(retryChainRowNode({model:'',fallbacks:[{provider:'',model:''}]}))}
+function retryFallbackNode(target,container){const wrapper=node('div','retryFallback');wrapper.dataset.retryFallback='1';const providerField=node('label','field');providerField.append(node('span','',t('retry.provider')));const providerInput=document.createElement('input');providerInput.setAttribute('list','retryProviderOptions');providerInput.setAttribute('spellcheck','false');providerInput.dataset.retryProvider='1';providerInput.value=(target&&target.provider)||'';providerField.append(providerInput);const modelField=node('label','field');modelField.append(node('span','',t('retry.fallback')));const modelInput=document.createElement('input');modelInput.setAttribute('list','retryModelOptions');modelInput.setAttribute('spellcheck','false');modelInput.dataset.retryFallbackModel='1';modelInput.value=(target&&target.model)||'';modelField.append(modelInput);const remove=node('button','ghost retryRemove','');remove.type='button';remove.textContent=t('retry.remove');remove.addEventListener('click',()=>{const siblings=container?container.querySelectorAll('[data-retry-fallback]'):[];if(siblings.length<=1){providerInput.value='';modelInput.value=''}else wrapper.remove()});wrapper.append(providerField,modelField,remove);return wrapper}
+function retryClearEmptyState(){if(!retryChainEditor)return;for(const empty of retryChainEditor.querySelectorAll('.retryEmpty'))empty.remove()}
+function retryEnsureEmptyState(){if(!retryChainEditor)return;if(retryChainEditor.querySelector('[data-retry-row]'))return;if(retryChainEditor.querySelector('.retryEmpty'))return;retryChainEditor.append(node('div','retryEmpty',t('retry.chainEmpty')))}
+function retryChainRowNode(row){const wrapper=node('div','retryChainRow');wrapper.dataset.retryRow='1';const head=node('div','retryChainRowHead');const modelField=node('label','field');modelField.append(node('span','',t('retry.rowModel')));const modelInput=document.createElement('input');modelInput.setAttribute('list','retryModelOptions');modelInput.setAttribute('spellcheck','false');modelInput.dataset.retryModel='1';modelInput.value=(row&&row.model)||'';modelField.append(modelInput);const actions=node('div','retryRowActions');const addFallback=node('button','ghost','');addFallback.type='button';addFallback.textContent=t('retry.addFallback');const removeRow=node('button','ghost','');removeRow.type='button';removeRow.textContent=t('retry.removeRow');actions.append(addFallback,removeRow);head.append(modelField,actions);const fallbacks=node('div','retryFallbacks');const source=row&&Array.isArray(row.fallbacks)&&row.fallbacks.length?row.fallbacks:[{provider:'',model:''}];for(const target of source)fallbacks.append(retryFallbackNode(target,fallbacks));addFallback.addEventListener('click',()=>fallbacks.append(retryFallbackNode({provider:'',model:''},fallbacks)));removeRow.addEventListener('click',()=>{wrapper.remove();retryEnsureEmptyState()});wrapper.append(head,fallbacks);return wrapper}
+function renderRetryChainEditor(rows){if(!retryChainEditor)return;retryChainEditor.replaceChildren();for(const row of (Array.isArray(rows)?rows:[]))retryChainEditor.append(retryChainRowNode(row));retryEnsureEmptyState()}
+function fillRetrySettings(){const s=STATUS.settings||{};retryElement('retryEnabled').checked=s.retry_enabled===true;retryElement('retryShadow').checked=s.retry_shadow===true;retryElement('retryStripReasoning').checked=s.retry_strip_reasoning!==false;retryElement('retryMaxAttempts').value=s.retry_max_attempts||4;retryElement('retryMaxFrames').value=s.retry_max_frames||4096;retryElement('retryStallTimeout').value=s.retry_stall_timeout||'60s';retryElement('retryHoldTimeout').value=s.retry_hold_timeout||'90s';retryElement('retryChainDeadline').value=s.retry_chain_deadline||'240s';retryElement('retryMaxBytes').value=s.retry_max_bytes||'8MB';renderRetryChainEditor(s.retry_chain||[])}
+const RETRY_DURATION_RE=/^\d+(\.\d+)?(ns|us|µs|ms|s|m|h)+$/i;
+const RETRY_SIZE_RE=/^\d+(\.\d+)?(B|KB|MB|GB|TB|KiB|MiB|GiB|TiB)$/i;
+function retryPayloadError(payload){const attempts=Number(payload.retry_max_attempts);if(!Number.isSafeInteger(attempts)||attempts<1||attempts>16)return 'retry.error.attempts';const frames=Number(payload.retry_max_frames);if(!Number.isSafeInteger(frames)||frames<1)return 'retry.error.frames';if(!RETRY_SIZE_RE.test(String(payload.retry_max_bytes||'')))return 'retry.error.size';for(const key of ['retry_stall_timeout','retry_hold_timeout','retry_chain_deadline']){if(!RETRY_DURATION_RE.test(String(payload[key]||'')))return 'retry.error.duration'}if(payload.retry_enabled){if(!Array.isArray(payload.retry_chain)||payload.retry_chain.length===0)return 'retry.invalidRow';for(const row of payload.retry_chain){if(!row.model||!Array.isArray(row.fallbacks)||row.fallbacks.length===0)return 'retry.invalidRow'}}return ''}
+async function saveRetrySettings(){try{if(!statusLoaded){await loadStatus();return}const payload=collectSettingsPayload();const problem=retryPayloadError(payload);if(problem){showNotice(t(problem),true,problem);return}await requestManagement('/settings',{method:'PUT',body:payload});settingsDirty=false;showNotice(t('notice.retrySaved'),false,'notice.retrySaved');await refreshStatus({management:true,fillSettings:true});await refreshRetryStats()}catch(error){showNotice(error.message||String(error),true)}}
+async function requestManagementRoot(path,query){const headers=authHeaders();let url='/v0/management'+path;if(query){const params=new URLSearchParams(query);url+='?'+params.toString()}const resp=await fetch(url,{method:'GET',headers});const data=await readJSON(resp);if(!resp.ok){const message=data.error||data.message||t('error.requestFailed',{status:resp.status});throw new Error(message)}return data}
+function addRetryProvider(providers,name){const value=String(name||'').trim();if(value)providers.add(value)}
+function collectRetryProviders(config,providers){providers.add('codex');providers.add('openai');if(!config||typeof config!=='object')return;const compat=config['openai-compatibility'];if(Array.isArray(compat)){for(const entry of compat){const name=String((entry&&entry.name)||'').trim();if(!name)continue;providers.add('openai-compatible-'+name.toLowerCase())}}for(const pair of [['gemini-api-key','gemini'],['claude-api-key','claude'],['vertex-api-key','vertex'],['codex-api-key','codex'],['interactions-api-key','interactions']]){if(config[pair[0]])providers.add(pair[1])}}
+function collectRetryModels(config,models){if(!config||typeof config!=='object')return;const compat=config['openai-compatibility'];if(!Array.isArray(compat))return;for(const entry of compat){const list=entry&&Array.isArray(entry.models)?entry.models:[];for(const model of list){for(const value of [model&&model.alias,model&&model.name,model&&model['display-name']]){const id=String(value||'').trim();if(id)models.add(id)}}}}
+function retrySetCatalogStatus(text){const node=document.getElementById('retryCatalogStatus');if(node)node.textContent=text}
+function renderRetryCatalogOptions(){const providerList=document.getElementById('retryProviderOptions');const modelList=document.getElementById('retryModelOptions');if(providerList){providerList.replaceChildren();for(const value of retryCatalog.providers)providerList.append(retryOptionNode(value))}if(modelList){modelList.replaceChildren();for(const value of retryCatalog.models)modelList.append(retryOptionNode(value))}}
+async function loadRetryCatalog(){retrySetCatalogStatus(t('retry.catalogLoading'));try{let config=null;try{config=await requestManagementRoot('/config')}catch(error){config=null}const providers=new Set();const models=new Set();collectRetryProviders(config,providers);collectRetryModels(config,models);let files=[];try{const listing=await requestManagementRoot('/auth-files');files=Array.isArray(listing.files)?listing.files:[]}catch(error){files=[]}let queried=0;for(const file of files){addRetryProvider(providers,file&&file.provider);const name=String((file&&file.name)||'').trim();if(!name||queried>=40)continue;queried+=1;try{const detail=await requestManagementRoot('/auth-files/models',{name:name});for(const model of (detail.models||[])){for(const value of [model&&model.id,model&&model.display_name]){const id=String(value||'').trim();if(id)models.add(id)}}}catch(error){}}retryCatalog.providers=Array.from(providers).sort();retryCatalog.models=Array.from(models).sort();retryCatalog.loaded=true;renderRetryCatalogOptions();retrySetCatalogStatus(retryCatalog.providers.length===0?t('retry.catalogEmpty'):t('retry.catalogLoaded'))}catch(error){retrySetCatalogStatus(t('retry.catalogFailed'))}}
+async function refreshRetryStats(){try{const data=await requestManagement('/retry/status',{query:{format:'json'}});retryStats=data||{};retryStatsLoaded=true}catch(error){retryStatsLoaded=false}renderRetryStats()}
+function renderRetryStats(){const container=document.getElementById('retryStats');const events=document.getElementById('retryEvents');if(!container||!events)return;container.replaceChildren();const mode=String(retryStats.mode||'off');const modeKey=mode==='live'?'retry.modeLive':mode==='shadow'?'retry.modeShadow':'retry.modeOff';const cards=[[t('retry.mode'),t(modeKey)],[t('retry.requests'),retryStats.requests||0],[t('retry.retries'),retryStats.retries||0],[t('retry.succeeded'),retryStats.succeeded||0],[t('retry.failed'),retryStats.failed||0],[t('retry.shadowHits'),retryStats.shadow_hits||0]];for(const card of cards){const box=node('div','retryStat');box.append(node('span','retryStatLabel',card[0]),node('span','retryStatValue',String(card[1])));container.append(box)}const chain=Array.isArray(retryStats.chain)?retryStats.chain:[];if(chain.length){const summary=node('div','retryChainSummary');summary.append(node('div','retryChainSummaryTitle',t('retry.chainTitle')));for(const line of chain)summary.append(node('div','retryChainLine',line));container.append(summary)}events.replaceChildren();const history=Array.isArray(retryStats.events)?retryStats.events.slice().reverse():[];if(history.length===0){events.append(node('div','empty',t('retry.noEvents')));return}for(const event of history){const row=node('div','logItem info');const meta=node('div','logMeta',[event.at?formatLogTime(event.at):'',event.model||'',event.target||''].filter(Boolean).join(' · '));const detail=[event.outcome||'',event.kind||'',event.reason||'',event.next_target?'-> '+event.next_target:''].filter(Boolean).join(' ');row.append(meta,node('div','logMsg',detail));events.append(row)}}
 const groupsByID=new Map();
 let editingAuthID='';
 let currentLocale=detectLocale();
 let statusLoaded=!STATUS.shell;
 let settingsDirty=false;
 let settingsInitialized=!STATUS.shell;
+let retryCatalog={providers:[],models:[],loaded:false};
+let retryStats={};
+let retryStatsLoaded=false;
 let statusPollID=0;
 const INLINE_TRANSLATIONS=[
   ['下一优先','Next preferred'],['可用','Available'],['未知类型','unknown type'],['CPA 优先级','CPA priority'],['插件优先级','Plugin priority'],['熔断：','Circuit: '],['熔断','Circuit'],['全开','closed'],['半开','half-open'],
@@ -1380,16 +1548,16 @@ function showNotice(text,isError,i18nKey){notice.hidden=false;notice.textContent
 function rebuildDerivedState(){accountsByID.clear();groupsByID.clear();for(const account of STATUS.accounts||[]){if(account.auth_id)accountsByID.set(account.auth_id,account);if(account.group_id)groupsByID.set(account.group_id,{name:account.group||'',notes:account.group_notes||''})}for(const group of STATUS.groups||[]){if(group.id)groupsByID.set(group.id,{name:group.name||'',notes:group.notes||''})}}
 function renderMetrics(){const empty=currentLocale==='en'?'None':'暂无';const monthlyMode=STATUS.monthly_mode==='priority'?(currentLocale==='en'?'prefer Monthly':'优先使用'):(currentLocale==='en'?'by expiry time':'按到期时间');const setText=(id,text)=>{const node=document.getElementById(id);if(node)node.textContent=text};setText('metricNextAuthID',STATUS.next_auth_id||empty);setText('metricMonthlyMode',monthlyMode);setText('metricLastSelected',STATUS.last_selected||empty)}
 function hasManagementKey(){const input=document.getElementById('managementKey');return !!(input&&(input.value||'').trim())}
-function settingsFocusedOrDirty(){const panel=document.getElementById('settingsPanel');return settingsDirty||(panel&&panel.contains(document.activeElement))}
+function settingsFocusedOrDirty(){const panels=[document.getElementById('settingsPanel'),document.getElementById('retryPanel')];return settingsDirty||panels.some((panel)=>panel&&panel.contains(document.activeElement))}
 function updateResetProbeWarning(){const warning=document.getElementById('resetProbeWarning');if(warning)warning.hidden=!(statusLoaded&&STATUS.settings&&STATUS.settings.enable_reset_probe!==true)}
 function updateProtectedVisibility(){const loaded=statusLoaded;const show=(id,visible)=>{const item=document.getElementById(id);if(item)item.hidden=!visible};show('settingsPanel',loaded);show('protectedMain',loaded);show('refreshQuota',loaded);show('loadData',!loaded);updateResetProbeWarning()}
 function renderRosterLifecycle(){const warning=document.getElementById('rosterLifecycleWarning');const title=document.getElementById('rosterLifecycleTitle');const body=document.getElementById('rosterLifecycleBody');if(!warning||!title||!body)return;const roster=STATUS.roster||{};const messages=[roster.warning,roster.risk_warning].filter(Boolean);warning.hidden=messages.length===0;title.textContent=[roster.capability,roster.health].filter(Boolean).join(' / ')||'Roster lifecycle';body.textContent=messages.join(' ')}
-function applyStatus(data,options){STATUS=data;statusLoaded=true;rebuildDerivedState();const shouldFillSettings=(options&&options.fillSettings)||!settingsInitialized||!settingsFocusedOrDirty();if(shouldFillSettings){fillSettings();settingsInitialized=true}renderMetrics();renderRosterLifecycle();renderAccounts(STATUS.accounts||[]);renderLogs(STATUS.logs||[]);updateProtectedVisibility();applyLocale()}
+function applyStatus(data,options){STATUS=data;statusLoaded=true;rebuildDerivedState();const shouldFillSettings=(options&&options.fillSettings)||!settingsInitialized||!settingsFocusedOrDirty();if(shouldFillSettings){fillSettings();settingsInitialized=true}renderMetrics();renderRosterLifecycle();renderAccounts(STATUS.accounts||[]);renderLogs(STATUS.logs||[]);updateProtectedVisibility();applyLocale();if(statusLoaded)refreshRetryStats()}
 async function refreshStatus(options){const opts=options||{};const data=await requestManagement('/status',{query:{format:'json'}});applyStatus(data,opts)}
 function startStatusPolling(){if(statusPollID)return;statusPollID=window.setInterval(()=>refreshStatus({management:true}).catch(()=>{}),15000)}
 async function loadStatus(){try{await refreshStatus({management:true,fillSettings:true});const remember=document.getElementById('rememberManagementKey');if(remember&&remember.checked&&hasManagementKey()){restoredManagementKey=true;syncManagementKeyVisibility()}showNotice(t('notice.statusLoaded'),false,'notice.statusLoaded');startStatusPolling()}catch(error){showNotice(error.message||String(error),true)}}
 async function pollStatus(times,delayMs){for(let i=0;i<times;i++){await new Promise((resolve)=>window.setTimeout(resolve,delayMs));await refreshStatus()}}
-function collectSettingsPayload(){return{handle_enabled:document.getElementById('handleEnabled').checked,enable_usage_feedback:document.getElementById('usageFeedback').checked,enable_reset_probe:document.getElementById('enableResetProbe').checked,probe_on_provisional_roster:document.getElementById('probeOnProvisionalRoster').checked,monthly_mode:document.getElementById('monthlyMode').value,quota_refresh_interval:document.getElementById('refreshInterval').value.trim(),stale_after:document.getElementById('staleAfter').value.trim(),refresh_active_window:document.getElementById('refreshActiveWindow').value.trim(),refresh_after_reset_delay:document.getElementById('refreshAfterResetDelay').value.trim(),refresh_retry_delays:document.getElementById('refreshRetryDelays').value.trim(),refresh_on_startup:document.getElementById('refreshOnStartup').checked,max_refresh_concurrency:Number.parseInt(document.getElementById('maxConcurrency').value,10)||1,circuit_failure_threshold:Number.parseInt(document.getElementById('circuitFailureThreshold').value,10)||5,circuit_open_duration:document.getElementById('circuitOpenDuration').value.trim(),circuit_half_open_success_threshold:Number.parseInt(document.getElementById('circuitHalfOpenSuccessThreshold').value,10)||2,max_log_entries:Number.parseInt(document.getElementById('maxLogEntries').value,10)||200,log_retention:document.getElementById('logRetention').value.trim()}}
+function collectSettingsPayload(){return{handle_enabled:document.getElementById('handleEnabled').checked,enable_usage_feedback:document.getElementById('usageFeedback').checked,enable_reset_probe:document.getElementById('enableResetProbe').checked,probe_on_provisional_roster:document.getElementById('probeOnProvisionalRoster').checked,monthly_mode:document.getElementById('monthlyMode').value,quota_refresh_interval:document.getElementById('refreshInterval').value.trim(),stale_after:document.getElementById('staleAfter').value.trim(),refresh_active_window:document.getElementById('refreshActiveWindow').value.trim(),refresh_after_reset_delay:document.getElementById('refreshAfterResetDelay').value.trim(),refresh_retry_delays:document.getElementById('refreshRetryDelays').value.trim(),refresh_on_startup:document.getElementById('refreshOnStartup').checked,max_refresh_concurrency:Number.parseInt(document.getElementById('maxConcurrency').value,10)||1,circuit_failure_threshold:Number.parseInt(document.getElementById('circuitFailureThreshold').value,10)||5,circuit_open_duration:document.getElementById('circuitOpenDuration').value.trim(),circuit_half_open_success_threshold:Number.parseInt(document.getElementById('circuitHalfOpenSuccessThreshold').value,10)||2,max_log_entries:Number.parseInt(document.getElementById('maxLogEntries').value,10)||200,log_retention:document.getElementById('logRetention').value.trim(),retry_enabled:retryElement('retryEnabled').checked===true,retry_shadow:retryElement('retryShadow').checked===true,retry_strip_reasoning:retryElement('retryStripReasoning').checked!==false,retry_max_attempts:retryIntValue('retryMaxAttempts',4),retry_max_frames:retryIntValue('retryMaxFrames',4096),retry_stall_timeout:retryTextValue('retryStallTimeout','60s'),retry_hold_timeout:retryTextValue('retryHoldTimeout','90s'),retry_chain_deadline:retryTextValue('retryChainDeadline','240s'),retry_max_bytes:retryTextValue('retryMaxBytes','8MB'),retry_chain:collectRetryChainRows()}}
 function node(tag,className,text){const item=document.createElement(tag);if(className)item.className=className;if(text!==undefined)item.textContent=text;return item}
 function addKV(parent,key,value){parent.append(node('span','',key),node('span','',value||'暂无'))}
 function quotaSourceLabel(source){if(source==='observed')return currentLocale==='en'?'Response observation':'响应观测';if(source==='polled')return currentLocale==='en'?'Polled refresh':'轮询刷新';return ''}
@@ -1407,7 +1575,7 @@ function renderAccounts(accounts){const queue=document.querySelector('section.qu
 async function readJSON(resp){const text=await resp.text();if(!text)return{};try{return JSON.parse(text)}catch{return{error:text}}}
 function authHeaders(){const input=document.getElementById('managementKey');const key=(input&&input.value||'').trim();if(!key)throw new Error(t('error.managementKeyRequired'));const name='Author'+'ization';const scheme='Bea'+'rer ';const headers={};headers[name]=key.toLowerCase().startsWith(scheme.toLowerCase())?key:scheme+key;return headers}
 async function requestManagement(path,options){const opts=options||{};const headers=authHeaders();let url=MANAGEMENT_BASE+path;if(opts.query){const params=new URLSearchParams(opts.query);url+='?'+params.toString()}const init={method:opts.method||'GET',headers};if(Object.prototype.hasOwnProperty.call(opts,'body')){headers['Content-Type']=opts.contentType||'application/json';init.body=typeof opts.body==='string'?opts.body:JSON.stringify(opts.body)}const resp=await fetch(url,init);const data=await readJSON(resp);const message=data.error||data.message||t('error.requestFailed',{status:resp.status});if(!resp.ok){if(resp.status===401||/invalid management key/i.test(message))showManagementKeyInput();throw new Error(message)}return data}
-function fillSettings(){const s=STATUS.settings||{};document.getElementById('handleEnabled').checked=s.handle_enabled!==false;document.getElementById('usageFeedback').checked=s.enable_usage_feedback!==false;document.getElementById('enableResetProbe').checked=s.enable_reset_probe===true;document.getElementById('probeOnProvisionalRoster').checked=s.probe_on_provisional_roster===true;document.getElementById('monthlyMode').value=s.monthly_mode||'expiry_order';document.getElementById('refreshInterval').value=s.quota_refresh_interval||'30m0s';document.getElementById('staleAfter').value=s.stale_after||'5h0m0s';document.getElementById('refreshActiveWindow').value=s.refresh_active_window||'1h0m0s';document.getElementById('refreshAfterResetDelay').value=s.refresh_after_reset_delay||'1m0s';document.getElementById('refreshRetryDelays').value=s.refresh_retry_delays||'1m0s,5m0s,15m0s';document.getElementById('refreshOnStartup').checked=s.refresh_on_startup===true;document.getElementById('maxConcurrency').value=s.max_refresh_concurrency||1;document.getElementById('circuitFailureThreshold').value=s.circuit_failure_threshold||5;document.getElementById('circuitOpenDuration').value=s.circuit_open_duration||'30m0s';document.getElementById('circuitHalfOpenSuccessThreshold').value=s.circuit_half_open_success_threshold||2;document.getElementById('maxLogEntries').value=s.max_log_entries||200;document.getElementById('logRetention').value=s.log_retention||'24h0m0s'}
+function fillSettings(){const s=STATUS.settings||{};document.getElementById('handleEnabled').checked=s.handle_enabled!==false;document.getElementById('usageFeedback').checked=s.enable_usage_feedback!==false;document.getElementById('enableResetProbe').checked=s.enable_reset_probe===true;document.getElementById('probeOnProvisionalRoster').checked=s.probe_on_provisional_roster===true;document.getElementById('monthlyMode').value=s.monthly_mode||'expiry_order';document.getElementById('refreshInterval').value=s.quota_refresh_interval||'30m0s';document.getElementById('staleAfter').value=s.stale_after||'5h0m0s';document.getElementById('refreshActiveWindow').value=s.refresh_active_window||'1h0m0s';document.getElementById('refreshAfterResetDelay').value=s.refresh_after_reset_delay||'1m0s';document.getElementById('refreshRetryDelays').value=s.refresh_retry_delays||'1m0s,5m0s,15m0s';document.getElementById('refreshOnStartup').checked=s.refresh_on_startup===true;document.getElementById('maxConcurrency').value=s.max_refresh_concurrency||1;document.getElementById('circuitFailureThreshold').value=s.circuit_failure_threshold||5;document.getElementById('circuitOpenDuration').value=s.circuit_open_duration||'30m0s';document.getElementById('circuitHalfOpenSuccessThreshold').value=s.circuit_half_open_success_threshold||2;document.getElementById('maxLogEntries').value=s.max_log_entries||200;document.getElementById('logRetention').value=s.log_retention||'24h0m0s';fillRetrySettings()}
 async function saveSettings(){try{if(!statusLoaded){await loadStatus();return}await requestManagement('/settings',{method:'PUT',body:collectSettingsPayload()});settingsDirty=false;showNotice(t('notice.settingsSaved'),false,'notice.settingsSaved');await refreshStatus({management:true,fillSettings:true})}catch(error){showNotice(error.message||String(error),true)}}
 async function refreshQuota(){try{await requestManagement('/refresh',{method:'POST'});showNotice(t('notice.refreshRequested'),false,'notice.refreshRequested');await refreshStatus({management:true});pollStatus(3,1200)}catch(error){showNotice(error.message||String(error),true)}}
 function splitTags(text){return text.split(',').map((item)=>item.trim()).filter(Boolean)}
@@ -1440,6 +1608,12 @@ document.getElementById('importFile').addEventListener('change',(event)=>importC
 document.getElementById('saveAccount').addEventListener('click',saveAccountModal);
 settingsPanel.addEventListener('input',()=>{settingsDirty=true});
 settingsPanel.addEventListener('change',()=>{settingsDirty=true});
+retryPanel.addEventListener('input',()=>{settingsDirty=true});
+retryPanel.addEventListener('change',()=>{settingsDirty=true});
+document.getElementById('retryAddRow').addEventListener('click',()=>addRetryChainRow());
+document.getElementById('retryReloadCatalog').addEventListener('click',loadRetryCatalog);
+document.getElementById('retrySave').addEventListener('click',saveRetrySettings);
+document.getElementById('retryRefreshStats').addEventListener('click',refreshRetryStats);
 document.getElementById('editGroupID').addEventListener('input',fillGroupFromID);
 document.getElementById('editGroupID').addEventListener('blur',fillGroupFromID);
 document.getElementById('closeDialog').addEventListener('click',()=>editDialog.close());
@@ -1459,6 +1633,7 @@ applyLocale();
 updateProtectedVisibility();
 if(statusLoaded)startStatusPolling();
 else if(rememberedManagementKey)loadStatus();
+if(statusLoaded)refreshRetryStats();
 </script>
 </body>
 </html>`))
