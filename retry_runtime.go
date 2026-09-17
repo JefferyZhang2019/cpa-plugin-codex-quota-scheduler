@@ -996,7 +996,7 @@ func retryStatusSnapshot(cfg Config) RetryStatusPayload {
 		for _, fallback := range row.Fallbacks {
 			targets = append(targets, FormatRetryTarget(fallback))
 		}
-		payload.Chain = append(payload.Chain, strings.Join(targets, " -> "))
+		payload.Chain = append(payload.Chain, strings.Join(targets, " → "))
 	}
 	globalRetryStats.mu.Lock()
 	defer globalRetryStats.mu.Unlock()
