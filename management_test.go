@@ -2064,3 +2064,54 @@ func TestAnnotationsPersistenceFailureDoesNotMutateMemory(t *testing.T) {
 		})
 	}
 }
+
+// The management page ships inside the plugin binary, so an upgraded plugin
+// must not leave a browser holding a previous release's markup, scripts, and
+// validation rules. And because the page validates the retry budgets it just
+// loaded, its grammar has to accept the exact strings the API hands it.
+func TestManagementHTMLIsUncacheableAndAcceptsItsOwnRetryBudgets(t *testing.T) {
+	store := NewPluginState(DefaultConfig())
+	paths := []string{
+		managementBasePath + "/status",
+		"/v0/resource/plugins/codex-fleet-manager/status",
+	}
+	for _, path := range paths {
+		resp := HandleManagementRequest(store, pluginapi.ManagementRequest{
+			Method: http.MethodGet,
+			Path:   path,
+		}, time.Now())
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("%s: StatusCode = %d, want %d; body=%s", path, resp.StatusCode, http.StatusOK, resp.Body)
+		}
+		if got := resp.Headers.Get("Content-Type"); got != "text/html; charset=utf-8" {
+			t.Fatalf("%s: Content-Type = %q, want text/html", path, got)
+		}
+		if got := resp.Headers.Get("Cache-Control"); !strings.Contains(got, "no-store") {
+			t.Fatalf("%s: Cache-Control = %q, want no-store", path, got)
+		}
+		if got := resp.Headers.Get("Pragma"); got != "no-cache" {
+			t.Fatalf("%s: Pragma = %q, want no-cache", path, got)
+		}
+	}
+
+	page := string(RenderStatusHTML(BuildStatusShellPayload(time.Now())))
+
+	// The page validator accepts the seconds form that formatRetryDuration emits.
+	if !strings.Contains(page, `RETRY_DURATION_RE=/^(\d+(\.\d+)?(ns|us|µs|ms|s|m|h))+$/i`) {
+		t.Fatalf("retry duration grammar is missing or stricter than the API output form")
+	}
+	// A bare number is read as seconds instead of being rejected.
+	if !strings.Contains(page, "function retryNormalizeDuration(") || !strings.Contains(page, "function retryDurationValue(") {
+		t.Fatalf("retry duration inputs do not normalize bare seconds")
+	}
+	// Budget fields carry unit hints so the accepted form is visible.
+	for _, want := range []string{`id="retryStallTimeout" spellcheck="false" placeholder="60s"`, `id="retryChainDeadline" spellcheck="false" placeholder="240s"`} {
+		if !strings.Contains(page, want) {
+			t.Fatalf("retry page missing budget hint %q", want)
+		}
+	}
+	// Failures name the offending field and value instead of only the rule.
+	if !strings.Contains(page, "function retryProblemMessage(problem)") {
+		t.Fatalf("retry page does not report which budget failed")
+	}
+}
