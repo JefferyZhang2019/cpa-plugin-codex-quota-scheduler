@@ -982,6 +982,11 @@ func retryStatusSnapshot(cfg Config) RetryStatusPayload {
 		if cfg.RetryShadow {
 			payload.Mode = "shadow"
 		}
+		if cfg.RetryAlways {
+			payload.Mode = "always"
+		}
+	} else if cfg.RetryEnabled && cfg.RetryAlways {
+		payload.Mode = "always"
 	} else {
 		payload.Mode = "off"
 	}

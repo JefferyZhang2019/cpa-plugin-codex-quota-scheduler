@@ -212,6 +212,17 @@ func retryChainRowFor(rows []RetryChainRow, model string) (RetryChainRow, bool) 
 func (cfg Config) RetryPlanFor(model string) (RetryPlan, bool) {
 	row, ok := retryChainRowFor(cfg.RetryChain, model)
 	if !ok {
+		if cfg.RetryAlways && strings.TrimSpace(model) != "" {
+			maxAttempts := cfg.RetryMaxAttempts
+			if maxAttempts <= 0 {
+				maxAttempts = DefaultConfig().RetryMaxAttempts
+			}
+			fallbacks := make([]RetryTarget, 0, maxAttempts-1)
+			for index := 1; index < maxAttempts; index++ {
+				fallbacks = append(fallbacks, NormalizeRetryTarget(RetryTarget{Model: model}))
+			}
+			return RetryPlan{Key: strings.TrimSpace(model), Requested: NormalizeRetryTarget(RetryTarget{Model: model}), Fallbacks: fallbacks, MaxAttempts: maxAttempts}, true
+		}
 		return RetryPlan{}, false
 	}
 	maxAttempts := cfg.RetryMaxAttempts
@@ -233,5 +244,5 @@ func (cfg Config) RetryPlanFor(model string) (RetryPlan, bool) {
 // RetryActive reports whether the chain should claim requests at all. The kill
 // switch wins over every other setting, and an empty chain is inert.
 func (cfg Config) RetryActive() bool {
-	return cfg.RetryEnabled && len(cfg.RetryChain) > 0
+	return cfg.RetryEnabled && (cfg.RetryAlways || len(cfg.RetryChain) > 0)
 }
