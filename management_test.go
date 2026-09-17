@@ -2114,4 +2114,19 @@ func TestManagementHTMLIsUncacheableAndAcceptsItsOwnRetryBudgets(t *testing.T) {
 	if !strings.Contains(page, "function retryProblemMessage(problem)") {
 		t.Fatalf("retry page does not report which budget failed")
 	}
+	for _, want := range []string{
+		`id="retryCheckCPA"`,
+		"function checkAndFixCPASettings()",
+		"function requestManagementText(",
+		"stream-bootstrap-buffering",
+		"stream-bootstrap-timeout",
+		"bootstrap-retries",
+		"function renumberRetryFallbacks(",
+		"for(const container of document.querySelectorAll('.retryFallbacks'))",
+		"log.retry.attempt_started",
+	} {
+		if !strings.Contains(page, want) {
+			t.Fatalf("retry page missing implementation marker %q", want)
+		}
+	}
 }
