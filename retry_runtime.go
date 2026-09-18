@@ -55,12 +55,10 @@ type rpcModelRouteRequest struct {
 }
 
 // hostModelExecutionRequest mirrors the host's host.model.execute_stream
-// payload. The SDK pinned by this module predates ForcedProvider/AuthID, so they
-// are declared here; the host reads the same JSON keys.
+// payload. ForcedProvider/AuthID ship natively on the v7.3.8 SDK's
+// HostModelExecutionRequest; only the callback id is declared here.
 type hostModelExecutionRequest struct {
 	pluginapi.HostModelExecutionRequest
-	ForcedProvider string `json:"forced_provider,omitempty"`
-	AuthID         string `json:"auth_id,omitempty"`
 	HostCallbackID string `json:"host_callback_id,omitempty"`
 }
 
@@ -144,7 +142,7 @@ func executorIdentifier() ([]byte, error) {
 	return okEnvelope(map[string]any{"identifier": PluginID})
 }
 
-const retryExecutorUnsupported = "codex-fleet-manager retry executor only serves streaming requests"
+const retryExecutorUnsupported = "codex-quota-scheduler retry executor only serves streaming requests"
 
 // executeRetryChainStream starts the chain and returns headers immediately. The
 // orchestration goroutine owns the plugin stream and always closes it.
@@ -491,16 +489,16 @@ func openNestedStream(cfg Config, exec pluginapi.ExecutorRequest, hostCallbackID
 	body := retryAttemptBody(cfg, exec, state)
 	request := hostModelExecutionRequest{
 		HostModelExecutionRequest: pluginapi.HostModelExecutionRequest{
-			EntryProtocol: protocol,
-			ExitProtocol:  protocol,
-			Model:         retryAttemptModel(exec, state),
-			Stream:        true,
-			Body:          body,
-			Headers:       exec.Headers,
-			Query:         exec.Query,
-			Alt:           exec.Alt,
+			EntryProtocol:  protocol,
+			ExitProtocol:   protocol,
+			Model:          retryAttemptModel(exec, state),
+			Stream:         true,
+			Body:           body,
+			Headers:        exec.Headers,
+			Query:          exec.Query,
+			Alt:            exec.Alt,
+			ForcedProvider: state.target.Provider,
 		},
-		ForcedProvider: state.target.Provider,
 		HostCallbackID: hostCallbackID,
 	}
 	raw, err := callHostModel(pluginabi.MethodHostModelExecuteStream, request)

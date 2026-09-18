@@ -303,6 +303,48 @@ log_retention: 24h
 `quota_endpoint` is restricted to the expected ChatGPT quota endpoint and cannot
 be redirected to an arbitrary host.
 
+## Model Retry Chain
+
+The Management UI includes an optional retry chain for upstream capacity and
+transport failures (adopted from doer-ee's Codex Fleet Manager, MIT). When
+enabled, a streaming request that fails before content reaches the client can
+move through configured fallback models. Retryable failures include HTTP 429,
+500, 502, 503, 504, and 529, capacity/overload failures, and equivalent
+transport failures; anything unrecognized fails closed, and a request whose
+content already reached the client is never retried. Each retry attempt is
+re-issued through the host, so the normal scheduler still selects the account
+and usage feedback still applies.
+
+Open the **Model Retry Chain** collapsible section in the sidebar. Each
+requested model can have ordered model-only fallbacks; CPA resolves the
+optional provider. Fallbacks are numbered independently for each requested
+model.
+
+Retry modes are **Live**, **Shadow** (record only, never retry), and **Always
+retry all models**. Always Retry also covers models without a configured
+chain; when no fallback exists, it retries the same model. Shadow and Always
+Retry are mutually exclusive. The section also configures maximum attempts
+(including the first attempt), silence/hold/chain timeouts, frame and byte
+buffers, and whether encrypted reasoning is removed when switching models.
+
+The section can check and repair the CPA prerequisites, but CPA must be
+`v7.3.4` or newer. If values are wrong, it shows an inline comparison table
+with current and recommended values; differences are marked in red. Nothing
+changes until **Apply recommended settings** is selected. The repair
+hot-reloads:
+
+```yaml
+request-retry: 3
+codex:
+  stream-bootstrap-buffering: true
+  stream-bootstrap-timeout: "0"
+streaming:
+  bootstrap-retries: 1
+```
+
+Retry scheduler events are persisted in plugin logs and localized in English
+and Chinese. The chain is disabled by default; enable it explicitly.
+
 ## Management UI
 
 Open **Codex Scheduler** from CPA Management Center, or visit:
@@ -314,11 +356,15 @@ Open **Codex Scheduler** from CPA Management Center, or visit:
 The page provides:
 
 - the production-ordered account queue and next-account preview;
+- separate Account Queue, Settings, and Retry Chain pages rather than placing
+  all settings in the middle column;
 - separate CPA priority and plugin priority indicators;
 - quota bars, reset times, availability reasons, and circuit state;
 - scheduler settings with plain-language safety guidance;
 - aliases, notes, tags, groups, and per-account plugin priority editing;
-- quota refresh, log viewing/export, and configuration import/export; and
+- quota refresh, log viewing/export, and configuration import/export;
+- automatic loading and de-duplication of routable model IDs when opening the
+  Retry Chain page; and
 - English and Chinese interface switching.
 
 The CPA plugin menu API accepts only one static label, so the registered

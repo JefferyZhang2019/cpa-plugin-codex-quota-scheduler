@@ -485,14 +485,25 @@ func TestRunRetryChainUsesChainDeadline(t *testing.T) {
 	cfg.RetryChainDeadline = time.Nanosecond
 	currentConfig.Store(cfg)
 
+	// Force monotonic-clock progress during attempt 0 so the pre-attempt
+	// deadline check is deterministic on hosts with coarse clock granularity
+	// (Windows can report identical timestamps for a whole in-memory chain).
+	underlying := callHostModel
+	previous := callHostModel
+	callHostModel = func(method string, payload any) (json.RawMessage, error) {
+		time.Sleep(25 * time.Millisecond)
+		return underlying(method, payload)
+	}
+	t.Cleanup(func() { callHostModel = previous })
+
 	runRetryChain(context.Background(), retryTestRequest("gpt-5.6-sol"), "plugin-stream")
 
 	requests, _, closeCalled := requestsOf(t, host)
 	if closeCalled != true {
 		t.Fatal("the plugin stream was never closed")
 	}
-	if len(requests) != 0 {
-		t.Fatalf("attempts = %d, want 0 once the deadline has passed", len(requests))
+	if len(requests) > 1 {
+		t.Fatalf("attempts = %d, want no fallback attempt once the deadline has passed", len(requests))
 	}
 }
 

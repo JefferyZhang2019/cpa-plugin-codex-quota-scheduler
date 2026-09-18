@@ -2073,7 +2073,7 @@ func TestManagementHTMLIsUncacheableAndAcceptsItsOwnRetryBudgets(t *testing.T) {
 	store := NewPluginState(DefaultConfig())
 	paths := []string{
 		managementBasePath + "/status",
-		"/v0/resource/plugins/codex-fleet-manager/status",
+		"/v0/resource/plugins/codex-quota-scheduler/status",
 	}
 	for _, path := range paths {
 		resp := HandleManagementRequest(store, pluginapi.ManagementRequest{
@@ -2118,6 +2118,8 @@ func TestManagementHTMLIsUncacheableAndAcceptsItsOwnRetryBudgets(t *testing.T) {
 		`id="retryCheckCPA"`,
 		"function checkAndFixCPASettings()",
 		"function requestManagementText(",
+		"function cpaVersionAtLeast(",
+		"v7.3.4",
 		"stream-bootstrap-buffering",
 		"stream-bootstrap-timeout",
 		"bootstrap-retries",
