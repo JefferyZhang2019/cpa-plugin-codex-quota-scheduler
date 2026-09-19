@@ -228,3 +228,44 @@ func TestProbeTimeJumpsProduceAtMostOneSequence(t *testing.T) {
 		}
 	}
 }
+
+func TestProbeWALRecoveryDeadlineTracksEarliestRecoverableAttempt(t *testing.T) {
+	now := time.Date(2026, 9, 19, 12, 0, 0, 0, time.UTC)
+	store := NewStateStore(filepath.Join(t.TempDir(), "state.json"), OSFileHooks(), nil)
+	wal := NewProbeWAL(store)
+
+	if _, ok := wal.RecoveryDeadline(); ok {
+		t.Fatal("empty WAL reported a recovery deadline")
+	}
+
+	seed := map[AuthInstanceID]ProbeAttempt{
+		1: {Instance: 1, AttemptID: "a-sent-unknown", Phase: ProbeAttemptSentUnknown, VerifyNotBefore: now.Add(3 * time.Second)},
+		2: {Instance: 2, AttemptID: "b-sending", Phase: ProbeAttemptSending, VerifyNotBefore: now.Add(30 * time.Second)},
+	}
+	if _, err := store.Update(func(s *PersistentState) error {
+		for id, a := range seed {
+			s.ProbeAttempts[id] = a
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	deadline, ok := wal.RecoveryDeadline()
+	if !ok {
+		t.Fatal("recoverable attempts exist but no deadline reported")
+	}
+	if !deadline.Equal(now.Add(3 * time.Second)) {
+		t.Fatalf("deadline = %s, want earliest VerifyNotBefore %s", deadline, now.Add(3*time.Second))
+	}
+
+	if _, err := store.Update(func(s *PersistentState) error {
+		s.ProbeAttempts = map[AuthInstanceID]ProbeAttempt{}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := wal.RecoveryDeadline(); ok {
+		t.Fatal("deadline reported with no recoverable attempts")
+	}
+}

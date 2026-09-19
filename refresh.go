@@ -1517,6 +1517,20 @@ func (r *QuotaRefresher) nextRefreshLoopDelay() (time.Duration, bool) {
 		} else if !launchActive {
 			probe = r.probeController.NextDeadline()
 		}
+		// Durable recoverable probe attempts (ambiguous sends persisted in the
+		// WAL) are their own wake source: their in-memory window states carry
+		// no NextDeadline entry, so a future VerifyNotBefore must be able to
+		// wake an otherwise idle loop. Only future deadlines contribute —
+		// already-due attempts are handled by the launch loop's own recovery
+		// pass, the error backoff, or startup recovery, and must not trigger
+		// an immediate relaunch here.
+		if !launchActive && probeRetryAt.IsZero() && r.probeWAL != nil {
+			if recoveryDue, ok := r.probeWAL.RecoveryDeadline(); ok && recoveryDue.After(now) {
+				if probe.IsZero() || recoveryDue.Before(probe) {
+					probe = recoveryDue
+				}
+			}
+		}
 		if !probe.IsZero() && (deadline.IsZero() || probe.Before(deadline)) {
 			deadline = probe
 		}
