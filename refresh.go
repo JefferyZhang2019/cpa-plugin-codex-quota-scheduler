@@ -565,9 +565,27 @@ func (r *QuotaRefresher) PublishAuthoritativeRoster(ctx context.Context, roster 
 		r.rosterMu.Unlock()
 		return ErrCapabilityB
 	}
-	allowed := map[string]struct{}{}
-	for _, id := range ids {
-		allowed[id] = struct{}{}
+	admission := CPAAdmissionState{Observed: true, Priority: priority}
+	if r.state.Config().ScheduleAcrossPriorities {
+		// Admit every tier: the pick ordering prefers higher tiers, and lower
+		// tiers become reachable when higher ones are exhausted.
+		if tiers, tiered := CodexTierGroups(roster.Entries); tiered {
+			admission.Tiers = tiers
+			admission.AuthIDs = make(map[string]struct{})
+			for _, tier := range tiers {
+				for id := range tier.AuthIDs {
+					admission.AuthIDs[id] = struct{}{}
+				}
+			}
+		}
+	}
+	allowed := admission.AuthIDs
+	if allowed == nil {
+		allowed = map[string]struct{}{}
+		for _, id := range ids {
+			allowed[id] = struct{}{}
+		}
+		admission.AuthIDs = allowed
 	}
 	filtered := roster
 	filtered.Entries = nil
@@ -586,7 +604,7 @@ func (r *QuotaRefresher) PublishAuthoritativeRoster(ctx context.Context, roster 
 		previousBindings[authID] = binding
 	}
 	r.bindings.mu.RUnlock()
-	reconciled, err := r.bindings.ReconcileRoster(ctx, filtered, bootstrapHost)
+	reconciled, err := r.bindings.ReconcileRosterTiers(ctx, filtered, bootstrapHost)
 	if err != nil {
 		return err
 	}
@@ -647,7 +665,7 @@ func (r *QuotaRefresher) PublishAuthoritativeRoster(ctx context.Context, roster 
 	}
 	owner := r.lifecycleRefresher()
 	owner.rosterAdmissionMu.Lock()
-	r.state.ReplaceCPAAdmission(CPAAdmissionState{Observed: true, Priority: priority, AuthIDs: allowed})
+	r.state.ReplaceCPAAdmission(admission)
 	if r.finalPublicationHook != nil {
 		r.finalPublicationHook()
 	}
@@ -989,7 +1007,7 @@ func (r *QuotaRefresher) RefreshDueCandidatesOnce(req pluginapi.SchedulerPickReq
 	}
 	_, version := r.state.CPAAdmissionVersioned()
 	if r.runtimeStore == nil {
-		if admission, ok := HighestPriorityCodexAdmission(req); ok {
+		if admission, ok := CodexAdmissionFromRequest(req, r.state.Config().ScheduleAcrossPriorities); ok {
 			version = r.state.ReplaceCPAAdmission(admission)
 		}
 	}

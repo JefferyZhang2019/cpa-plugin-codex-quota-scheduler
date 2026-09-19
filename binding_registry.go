@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"errors"
+	"sort"
 	"sync"
 )
 
@@ -100,12 +101,45 @@ func (r *BindingRegistry) ObserveExternalLogin(authID string, login LoginEpoch, 
 }
 
 func (r *BindingRegistry) ReconcileRoster(ctx context.Context, roster HostRosterSnapshot, host CredentialHost) (RosterReconcileResult, error) {
+	return r.reconcileRosterEntries(ctx, roster, host, false)
+}
+
+// ReconcileRosterTiers reconciles every prioritized codex entry of the given
+// roster. Production callers pass an admission-filtered roster, so with
+// schedule_across_priorities enabled the union of tiers reconciles; the
+// single-tier ReconcileRoster keeps its conservative highest-tier-only
+// semantics for direct callers.
+func (r *BindingRegistry) ReconcileRosterTiers(ctx context.Context, roster HostRosterSnapshot, host CredentialHost) (RosterReconcileResult, error) {
+	return r.reconcileRosterEntries(ctx, roster, host, true)
+}
+
+func (r *BindingRegistry) reconcileRosterEntries(ctx context.Context, roster HostRosterSnapshot, host CredentialHost, allTiers bool) (RosterReconcileResult, error) {
 	if roster.Capability != CapabilityA {
 		return RosterReconcileResult{}, ErrCapabilityB
 	}
-	_, ids, ok := HighestCodexTier(roster.Entries)
-	if !ok {
-		return RosterReconcileResult{}, ErrBindingNotRosterConfirmed
+	var ids []string
+	if allTiers {
+		seen := make(map[string]struct{}, len(roster.Entries))
+		for _, entry := range roster.Entries {
+			if entry.ID == "" || entry.Provider != "codex" || entry.Priority == nil {
+				continue
+			}
+			if _, duplicate := seen[entry.ID]; duplicate {
+				continue
+			}
+			seen[entry.ID] = struct{}{}
+			ids = append(ids, entry.ID)
+		}
+		if len(ids) == 0 {
+			return RosterReconcileResult{}, ErrBindingNotRosterConfirmed
+		}
+		sort.Strings(ids)
+	} else {
+		_, tierIDs, ok := HighestCodexTier(roster.Entries)
+		if !ok {
+			return RosterReconcileResult{}, ErrBindingNotRosterConfirmed
+		}
+		ids = tierIDs
 	}
 	entries := make(map[string]RosterEntry, len(ids))
 	for _, entry := range roster.Entries {

@@ -50,6 +50,12 @@ type Config struct {
 	CircuitHalfOpenSuccessThreshold int
 	MaxLogEntries                   int
 	LogRetention                    time.Duration
+	// ScheduleAcrossPriorities lets the scheduler fall through to lower CPA
+	// priority tiers when every account in the higher tiers is unavailable,
+	// instead of delegating to the built-in scheduler. Higher tiers still win
+	// whenever they have a selectable account. Hosts that do not send
+	// across-priority candidates keep single-tier behavior regardless.
+	ScheduleAcrossPriorities bool
 
 	// Retry chain. RetryEnabled is the kill switch: when it is false every
 	// request keeps today's behavior. RetryChain is empty by default, which is
@@ -74,12 +80,13 @@ type registration struct {
 }
 
 type registrationCapabilities struct {
-	Scheduler              bool `json:"scheduler"`
-	UsagePlugin            bool `json:"usage_plugin"`
-	ManagementAPI          bool `json:"management_api"`
-	RequestLifecyclePlugin bool `json:"request_lifecycle_plugin,omitempty"`
-	QuotaProvider          bool `json:"quota_provider,omitempty"`
-	StreamChunkInterceptor bool `json:"response_stream_interceptor,omitempty"`
+	Scheduler                 bool `json:"scheduler"`
+	UsagePlugin               bool `json:"usage_plugin"`
+	ManagementAPI             bool `json:"management_api"`
+	RequestLifecyclePlugin    bool `json:"request_lifecycle_plugin,omitempty"`
+	QuotaProvider             bool `json:"quota_provider,omitempty"`
+	StreamChunkInterceptor    bool `json:"response_stream_interceptor,omitempty"`
+	SchedulerAcrossPriorities bool `json:"scheduler_across_priorities,omitempty"`
 
 	// The retry chain is implemented as a model router plus a plugin executor.
 	// The router claims only models that have a configured chain, and the
@@ -112,6 +119,7 @@ type rawConfig struct {
 	CircuitHalfOpenSuccessThreshold *int   `yaml:"circuit_half_open_success_threshold"`
 	MaxLogEntries                   *int   `yaml:"max_log_entries"`
 	LogRetention                    string `yaml:"log_retention"`
+	ScheduleAcrossPriorities        *bool  `yaml:"schedule_across_priorities"`
 
 	RetryEnabled        *bool           `yaml:"retry_enabled"`
 	RetryShadow         *bool           `yaml:"retry_shadow"`
@@ -146,6 +154,7 @@ func DefaultConfig() Config {
 		CircuitHalfOpenSuccessThreshold: 2,
 		MaxLogEntries:                   200,
 		LogRetention:                    24 * time.Hour,
+		ScheduleAcrossPriorities:        true,
 
 		RetryEnabled:        false,
 		RetryShadow:         false,
@@ -362,6 +371,9 @@ func DecodeConfig(raw []byte) (Config, error) {
 		}
 		cfg.LogRetention = d
 	}
+	if decoded.ScheduleAcrossPriorities != nil {
+		cfg.ScheduleAcrossPriorities = *decoded.ScheduleAcrossPriorities
+	}
 	if decoded.RetryEnabled != nil {
 		cfg.RetryEnabled = *decoded.RetryEnabled
 	}
@@ -526,12 +538,13 @@ func PluginRegistration() registration {
 			Logo:             "https://raw.githubusercontent.com/router-for-me/CLIProxyAPI/main/docs/logo.png",
 		},
 		Capabilities: registrationCapabilities{
-			Scheduler:              true,
-			UsagePlugin:            true,
-			ManagementAPI:          true,
-			RequestLifecyclePlugin: true,
-			QuotaProvider:          true,
-			StreamChunkInterceptor: true,
+			Scheduler:                 true,
+			UsagePlugin:               true,
+			ManagementAPI:             true,
+			RequestLifecyclePlugin:    true,
+			QuotaProvider:             true,
+			StreamChunkInterceptor:    true,
+			SchedulerAcrossPriorities: true,
 
 			ModelRouter:           true,
 			Executor:              true,

@@ -164,6 +164,17 @@ type CPAAdmissionState struct {
 	Observed bool
 	Priority int
 	AuthIDs  map[string]struct{}
+	// Tiers lists every admitted CPA priority tier in descending order. It is
+	// populated when schedule_across_priorities is enabled and carries the
+	// per-tier priority used to keep each account's stored Priority accurate;
+	// AuthIDs remains the union of all tiers.
+	Tiers []TierAdmission
+}
+
+// TierAdmission is one CPA priority tier inside a CPAAdmissionState.
+type TierAdmission struct {
+	Priority int
+	AuthIDs  map[string]struct{}
 }
 
 type StateSnapshot struct {

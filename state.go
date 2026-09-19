@@ -103,16 +103,34 @@ func cloneCPAAdmission(value CPAAdmissionState) CPAAdmissionState {
 			cloned.AuthIDs[authID] = struct{}{}
 		}
 	}
+	for _, tier := range value.Tiers {
+		clonedTier := TierAdmission{Priority: tier.Priority, AuthIDs: make(map[string]struct{}, len(tier.AuthIDs))}
+		for authID := range tier.AuthIDs {
+			clonedTier.AuthIDs[authID] = struct{}{}
+		}
+		cloned.Tiers = append(cloned.Tiers, clonedTier)
+	}
 	return cloned
 }
 
 func equalCPAAdmission(left, right CPAAdmissionState) bool {
-	if left.Observed != right.Observed || left.Priority != right.Priority || len(left.AuthIDs) != len(right.AuthIDs) {
+	if left.Observed != right.Observed || left.Priority != right.Priority || len(left.AuthIDs) != len(right.AuthIDs) || len(left.Tiers) != len(right.Tiers) {
 		return false
 	}
 	for authID := range left.AuthIDs {
 		if _, ok := right.AuthIDs[authID]; !ok {
 			return false
+		}
+	}
+	for i, tier := range left.Tiers {
+		other := right.Tiers[i]
+		if tier.Priority != other.Priority || len(tier.AuthIDs) != len(other.AuthIDs) {
+			return false
+		}
+		for authID := range tier.AuthIDs {
+			if _, ok := other.AuthIDs[authID]; !ok {
+				return false
+			}
 		}
 	}
 	return true
@@ -129,12 +147,25 @@ func (s *PluginState) ReplaceCPAAdmission(value CPAAdmissionState) uint64 {
 	if !value.Observed {
 		return s.cpaAdmissionVersion
 	}
+	priorityByAuthID := make(map[string]int, len(value.AuthIDs))
+	for _, tier := range value.Tiers {
+		for authID := range tier.AuthIDs {
+			priorityByAuthID[authID] = tier.Priority
+		}
+	}
 	for key, account := range s.accounts {
 		if _, ok := value.AuthIDs[account.AuthID]; !ok {
 			delete(s.accounts, key)
 			continue
 		}
-		account.Priority = value.Priority
+		// Accounts keep the priority of their own tier; a single-tier
+		// admission (legacy or across-priorities disabled) overwrites with the
+		// tier priority as before.
+		if tierPriority, ok := priorityByAuthID[account.AuthID]; ok {
+			account.Priority = tierPriority
+		} else {
+			account.Priority = value.Priority
+		}
 		s.accounts[key] = account
 	}
 	return s.cpaAdmissionVersion
@@ -192,7 +223,29 @@ func (s *PluginState) AdmittedCPAPriorityVersioned(authID string) (int, uint64, 
 		return 0, s.cpaAdmissionVersion, false
 	}
 	_, ok := s.cpaAdmission.AuthIDs[authID]
-	return s.cpaAdmission.Priority, s.cpaAdmissionVersion, ok
+	if !ok {
+		return 0, s.cpaAdmissionVersion, false
+	}
+	// The account's own tier decides its priority; single-tier admissions
+	// (legacy or across-priorities disabled) keep the top priority.
+	for _, tier := range s.cpaAdmission.Tiers {
+		if _, inTier := tier.AuthIDs[authID]; inTier {
+			return tier.Priority, s.cpaAdmissionVersion, true
+		}
+	}
+	return s.cpaAdmission.Priority, s.cpaAdmissionVersion, true
+}
+
+// admissionPriorityLocked returns the priority of the account's own tier,
+// falling back to the admission's top priority for single-tier admissions.
+// Callers must hold s.mu.
+func (s *PluginState) admissionPriorityLocked(authID string) int {
+	for _, tier := range s.cpaAdmission.Tiers {
+		if _, inTier := tier.AuthIDs[authID]; inTier {
+			return tier.Priority
+		}
+	}
+	return s.cpaAdmission.Priority
 }
 
 func (s *PluginState) CPAAdmissionVersionCurrent(version uint64) bool {
@@ -469,7 +522,7 @@ func (s *PluginState) ApplyQuotaRefreshFailureIfAdmissionCurrent(account Account
 	if !s.admissionCurrentLocked(account.AuthID, version) {
 		return false
 	}
-	account.Priority = s.cpaAdmission.Priority
+	account.Priority = s.admissionPriorityLocked(account.AuthID)
 	account.LastError = message
 	account.Refresh.LastFailureKind = kind
 	account.Refresh.LastFailureAt = now
@@ -498,7 +551,7 @@ func (s *PluginState) ApplyQuotaRefreshSuccessIfAdmissionCurrent(account Account
 	if !s.admissionCurrentLocked(account.AuthID, version) {
 		return false
 	}
-	account.Priority = s.cpaAdmission.Priority
+	account.Priority = s.admissionPriorityLocked(account.AuthID)
 	if !account.LastSuccessAt.IsZero() && account.LastError == "" {
 		account.Refresh = AccountRefreshState{}
 	}

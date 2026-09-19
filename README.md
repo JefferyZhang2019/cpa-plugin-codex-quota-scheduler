@@ -45,9 +45,15 @@ accounts passed to the next one.
 - Only candidates whose provider is `codex` are considered. Other providers are
   ignored.
 - A Codex account without an explicit CPA auth priority is treated as priority `0`.
-- The plugin admits every Codex account in the highest confirmed CPA auth
-  priority tier. Lower CPA tiers remain under CPA's own fallback behavior and
-  are not loaded into the plugin queue.
+- With `schedule_across_priorities` enabled (the default, and the mode the
+  v7.3 host feeds with candidates from every tier), the plugin admits Codex
+  accounts from all CPA priority tiers. Higher tiers always win while they have
+  a selectable account; a lower tier is only reached when every higher tier is
+  unavailable, instead of delegating to CPA's built-in fallback. Lower tiers
+  are also refreshed so their availability is known.
+- With `schedule_across_priorities` disabled — or on hosts that only send the
+  highest tier — the plugin admits exactly the highest confirmed tier and lower
+  tiers stay under CPA's own fallback behavior.
 - If all Codex accounts should participate together, give them the same CPA auth
   priority. Priority `0` is the simplest recommended configuration.
 

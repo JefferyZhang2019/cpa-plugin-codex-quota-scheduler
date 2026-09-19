@@ -1167,8 +1167,8 @@ func TestProductionRosterPublicationBootstrapsHighestTierAndUsesWAL(t *testing.T
 	if _, ok := r.bindings.Lookup("high"); !ok {
 		t.Fatal("highest-tier binding missing")
 	}
-	if _, ok := r.bindings.Lookup("low"); ok {
-		t.Fatal("lower-tier binding bootstrapped")
+	if _, ok := r.bindings.Lookup("low"); !ok {
+		t.Fatal("lower-tier binding missing; across-priority tiers must bind for availability tracking")
 	}
 	version := r.state.ReplaceCPAAdmission(CPAAdmissionState{Observed: true, Priority: 9, AuthIDs: map[string]struct{}{"high": {}}})
 	current := CodexCredentials{AccessToken: "old", RefreshToken: "r0", ChatGPTAccountID: "acct", ExpiresAt: time.Unix(1, 0)}
@@ -1207,34 +1207,45 @@ func TestProductionRosterPublicationEnablesManualRefresh(t *testing.T) {
 	}
 
 	admission, _ := state.CPAAdmissionVersioned()
-	if !admission.Observed || admission.Priority != 9 || len(admission.AuthIDs) != 2 {
-		t.Fatalf("admission = %#v, want observed priority 9 with a and b", admission)
+	if !admission.Observed || admission.Priority != 9 || len(admission.AuthIDs) != 3 {
+		t.Fatalf("admission = %#v, want observed priority 9 with a, b, and the lower tier", admission)
 	}
-	for _, id := range []string{"a", "b"} {
+	for _, id := range []string{"a", "b", "low"} {
 		if _, ok := admission.AuthIDs[id]; !ok {
 			t.Fatalf("admission missing %q: %#v", id, admission)
 		}
 	}
-	if _, ok := admission.AuthIDs["low"]; ok {
-		t.Fatalf("lower tier admitted: %#v", admission)
+	if len(admission.Tiers) != 2 || admission.Tiers[1].Priority != 1 {
+		t.Fatalf("admission tiers = %#v, want both tiers with descending priorities", admission.Tiers)
 	}
 
 	getBefore, httpBefore := host.get, host.http
 	if err := r.RefreshOnce(); err != nil {
 		t.Fatal(err)
 	}
-	if got := host.get - getBefore; got != 2 {
-		t.Fatalf("refresh GetAuth delta = %d, want 2", got)
+	// All admitted tiers refresh: the lower tier must be tracked to know when
+	// it becomes reachable.
+	if got := host.get - getBefore; got != 3 {
+		t.Fatalf("refresh GetAuth delta = %d, want 3", got)
 	}
-	if got := host.http - httpBefore; got < 2 {
-		t.Fatalf("refresh HTTP delta = %d, want at least 2", got)
+	if got := host.http - httpBefore; got < 3 {
+		t.Fatalf("refresh HTTP delta = %d, want at least 3", got)
 	}
 	if host.list != 0 {
 		t.Fatalf("host ListAuths calls = %d, want confirmed-roster scan", host.list)
 	}
 	snapshot := state.Snapshot(now)
-	if snapshot.LastAuthScanAt.IsZero() || snapshot.CodexAuthCount != 2 || len(snapshot.Accounts) != 2 {
-		t.Fatalf("snapshot = %#v, want scanned and populated highest tier", snapshot)
+	if snapshot.LastAuthScanAt.IsZero() || snapshot.CodexAuthCount != 3 || len(snapshot.Accounts) != 3 {
+		t.Fatalf("snapshot = %#v, want scanned and populated every admitted tier", snapshot)
+	}
+	for _, account := range snapshot.Accounts {
+		want := 9
+		if account.AuthID == "low" {
+			want = 1
+		}
+		if account.Priority != want {
+			t.Fatalf("account %s priority = %d, want %d", account.AuthID, account.Priority, want)
+		}
 	}
 	for _, account := range snapshot.Accounts {
 		if account.Quota.FiveHour != nil || account.Quota.LongWindow == nil || account.Family != AccountFamilyWeekly {
@@ -1284,7 +1295,7 @@ func TestProductionRosterReplacementReplacesAdmissionAndFencesStaleRefresh(t *te
 		t.Fatal(err)
 	}
 	next, nextVersion := state.CPAAdmissionVersioned()
-	if nextVersion <= oldVersion || !next.Observed || next.Priority != 9 || len(next.AuthIDs) != 1 {
+	if nextVersion <= oldVersion || !next.Observed || next.Priority != 9 || len(next.AuthIDs) != 3 {
 		t.Fatalf("replacement admission=%#v version=%d old=%d", next, nextVersion, oldVersion)
 	}
 	if _, ok := next.AuthIDs["c"]; !ok {
@@ -1293,8 +1304,16 @@ func TestProductionRosterReplacementReplacesAdmissionAndFencesStaleRefresh(t *te
 	if state.BeginCPAAdmissionVersionCall(oldVersion) {
 		t.Fatal("stale admission version remained current")
 	}
-	if accounts := state.Snapshot(now).Accounts; len(accounts) != 0 {
-		t.Fatalf("demoted account state retained: %#v", accounts)
+	// Across-priority admission keeps demoted accounts at their own tier
+	// instead of deleting them; only accounts absent from every tier drop.
+	accounts := state.Snapshot(now).Accounts
+	if len(accounts) != 2 {
+		t.Fatalf("demoted account state = %#v, want both retained at tier 1", accounts)
+	}
+	for _, account := range accounts {
+		if account.Priority != 1 {
+			t.Fatalf("demoted account priority = %d, want 1: %#v", account.Priority, account)
+		}
 	}
 }
 

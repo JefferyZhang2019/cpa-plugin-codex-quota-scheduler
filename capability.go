@@ -108,3 +108,33 @@ func HighestCodexTier(entries []RosterEntry) (priority int, ids []string, ok boo
 	sort.Strings(ids)
 	return priority, ids, true
 }
+
+// CodexTierGroups groups roster entries by CPA priority, descending. It is the
+// tier-aware generalization of HighestCodexTier used when
+// schedule_across_priorities is enabled.
+func CodexTierGroups(entries []RosterEntry) ([]TierAdmission, bool) {
+	byPriority := make(map[int]map[string]struct{})
+	priorities := make([]int, 0, 4)
+	for _, entry := range entries {
+		if entry.ID == "" || entry.Provider != "codex" || entry.Priority == nil {
+			continue
+		}
+		priority := *entry.Priority
+		tier, exists := byPriority[priority]
+		if !exists {
+			tier = make(map[string]struct{})
+			byPriority[priority] = tier
+			priorities = append(priorities, priority)
+		}
+		tier[entry.ID] = struct{}{}
+	}
+	if len(priorities) == 0 {
+		return nil, false
+	}
+	sort.Sort(sort.Reverse(sort.IntSlice(priorities)))
+	tiers := make([]TierAdmission, 0, len(priorities))
+	for _, priority := range priorities {
+		tiers = append(tiers, TierAdmission{Priority: priority, AuthIDs: byPriority[priority]})
+	}
+	return tiers, true
+}

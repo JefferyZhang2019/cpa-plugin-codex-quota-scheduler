@@ -70,6 +70,9 @@ func oracleSelect(snapshot SchedulerSnapshot, candidates []Candidate, now time.T
 }
 
 func oracleBefore(a, b AccountView, mode MonthlyMode) bool {
+	if a.CPAPriority != b.CPAPriority {
+		return a.CPAPriority > b.CPAPriority
+	}
 	if a.PluginPriority > b.PluginPriority {
 		return true
 	}
