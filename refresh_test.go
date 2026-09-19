@@ -2062,7 +2062,10 @@ func TestRefreshOneOverridesHostUnavailableAndRecoversTemporaryExhausted(t *test
 		authJSON: map[string]json.RawMessage{
 			"idx-team": json.RawMessage(`{"access_token":"access-team","id_token":"` + token + `"}`),
 		},
-		httpBody: []byte(`{"rate_limit":{"primary_window":{"used_percent":0,"limit_window_seconds":18000,"reset_after_seconds":18000},"secondary_window":{"used_percent":5,"limit_window_seconds":604800,"reset_after_seconds":86400}}}`),
+		// Same-window full reading (reset stays at the marker's deadline, now+3h):
+		// the automatic window-identity reconciliation deliberately declines, and
+		// only the operator-requested refresh clears the marker.
+		httpBody: []byte(`{"rate_limit":{"primary_window":{"used_percent":0,"limit_window_seconds":18000,"reset_after_seconds":10800},"secondary_window":{"used_percent":5,"limit_window_seconds":604800,"reset_after_seconds":86400}}}`),
 	}
 	store := NewPluginState(DefaultConfig())
 	store.RecordCodexActivity(now)

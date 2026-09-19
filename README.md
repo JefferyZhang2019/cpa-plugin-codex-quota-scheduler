@@ -149,15 +149,24 @@ generic quota percentages alone:
 - **A real successful request through the account** clears the marker
   immediately. A later `usage_limit_reached` response re-marks the account with
   a fresh reset time.
+- **Any successful quota refresh clears the marker automatically when the fresh
+  snapshot carries strict reset evidence:** every known window shows remaining
+  capacity AND the five-hour window's reset deadline changed since the marker
+  was recorded (an upstream reset mints a new window). Without a five-hour
+  window, a usable long window that resets after the recorded deadline is
+  accepted as weaker fallback evidence.
 - **A manual per-account refresh from the Management UI** clears the marker when
-  the fresh quota snapshot shows remaining capacity in every known window. The
-  manual action also overrides host-side `disabled`/`unavailable` cooldown
-  flags, so an account can be refreshed after an operator-triggered upstream
-  reset even while CPA still keeps its own cooldown.
-- **Background refresh never clears the marker from percentages alone.** The
-  generic quota endpoint can report 100% remaining while model requests still
-  hit upstream 429 (observed on K12-plan credentials), so automatic recovery
-  requires the real-request evidence above.
+  the fresh quota snapshot shows remaining capacity in every known window —
+  even for a same-window full reading, because the operator explicitly
+  confirmed an upstream reset. The manual action also overrides host-side
+  `disabled`/`unavailable` cooldown flags, so an account can be refreshed after
+  an operator-triggered upstream reset even while CPA still keeps its own
+  cooldown.
+- **Background refresh never clears the marker from same-window percentages
+  alone.** The generic quota endpoint can report 100% remaining on the very
+  window the 429 pointed at while model requests still hit upstream 429
+  (observed on K12-plan credentials), so a same-window full reading without the
+  window-identity change above is not recovery evidence.
 
 ### Reset-window activation
 

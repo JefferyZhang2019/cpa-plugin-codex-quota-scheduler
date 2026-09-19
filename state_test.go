@@ -862,3 +862,107 @@ func TestRecordAccountSuccessClearsTemporaryExhausted(t *testing.T) {
 		t.Fatalf("temporary exhaustion survived a real request success: %#v", account)
 	}
 }
+
+func TestQuotaRefreshAutoClearsTemporaryExhaustionOnWindowIdentityChange(t *testing.T) {
+	now := time.Date(2026, 9, 19, 12, 0, 0, 0, time.UTC)
+	store := NewPluginState(DefaultConfig())
+	version := store.ReplaceCPAAdmission(CPAAdmissionState{Observed: true, Priority: 1, AuthIDs: map[string]struct{}{"auth-1": {}}})
+	store.UpsertQuota(AccountState{AuthID: "auth-1", AuthIndex: "idx-1", Provider: "codex", LastSuccessAt: now.Add(-time.Hour)})
+	store.MarkAccountTemporaryExhausted("auth-1", now.Add(3*time.Hour), usageLimitReachedReason)
+
+	// Upstream reset minted a new five-hour window (reset moved from 15:00 to
+	// 17:00) with remaining capacity in both windows.
+	fresh := accountByAuthID(t, store.Snapshot(now), "auth-1")
+	fresh.Quota = ParsedQuota{
+		Family:     AccountFamilyWeekly,
+		FiveHour:   &QuotaWindow{Kind: WindowFiveHour, UsedPercent: float64Ptr(0), ResetAt: now.Add(5 * time.Hour)},
+		LongWindow: &QuotaWindow{Kind: WindowWeekly, UsedPercent: float64Ptr(10), ResetAt: now.Add(72 * time.Hour)},
+	}
+	fresh.Family = AccountFamilyWeekly
+	fresh.LastSuccessAt = now
+	if !store.ApplyQuotaRefreshSuccessIfAdmissionCurrent(fresh, version, now) {
+		t.Fatal("fresh quota refresh was rejected")
+	}
+	account := accountByAuthID(t, store.Snapshot(now), "auth-1")
+	if account.TemporaryExhausted {
+		t.Fatalf("temporary exhaustion survived a confirmed window-identity change: %#v", account)
+	}
+	status, available, reason, _ := accountQueueState(account, now)
+	if status != QueueStatusAvailable || !available || reason != "" {
+		t.Fatalf("queue = status=%s available=%t reason=%q, want available", status, available, reason)
+	}
+}
+
+func TestQuotaRefreshKeepsTemporaryExhaustionOnSameWindowFullReading(t *testing.T) {
+	now := time.Date(2026, 9, 19, 12, 0, 0, 0, time.UTC)
+	store := NewPluginState(DefaultConfig())
+	version := store.ReplaceCPAAdmission(CPAAdmissionState{Observed: true, Priority: 1, AuthIDs: map[string]struct{}{"auth-1": {}}})
+	store.UpsertQuota(AccountState{AuthID: "auth-1", AuthIndex: "idx-1", Provider: "codex", LastSuccessAt: now.Add(-time.Hour)})
+	markReset := now.Add(3 * time.Hour)
+	store.MarkAccountTemporaryExhausted("auth-1", markReset, usageLimitReachedReason)
+
+	// K12-style misreport: the quota endpoint shows a full five-hour window,
+	// but it is the SAME window the 429 pointed at — no reset happened.
+	fresh := accountByAuthID(t, store.Snapshot(now), "auth-1")
+	fresh.Quota = ParsedQuota{
+		Family:     AccountFamilyWeekly,
+		FiveHour:   &QuotaWindow{Kind: WindowFiveHour, UsedPercent: float64Ptr(0), ResetAt: markReset},
+		LongWindow: &QuotaWindow{Kind: WindowWeekly, UsedPercent: float64Ptr(10), ResetAt: now.Add(72 * time.Hour)},
+	}
+	fresh.Family = AccountFamilyWeekly
+	fresh.LastSuccessAt = now
+	if !store.ApplyQuotaRefreshSuccessIfAdmissionCurrent(fresh, version, now) {
+		t.Fatal("fresh quota refresh was rejected")
+	}
+	account := accountByAuthID(t, store.Snapshot(now), "auth-1")
+	if !account.TemporaryExhausted {
+		t.Fatal("same-window full reading incorrectly cleared the temporary-exhaustion marker")
+	}
+}
+
+func TestQuotaRefreshKeepsTemporaryExhaustionWhenWindowStillLimited(t *testing.T) {
+	now := time.Date(2026, 9, 19, 12, 0, 0, 0, time.UTC)
+	store := NewPluginState(DefaultConfig())
+	version := store.ReplaceCPAAdmission(CPAAdmissionState{Observed: true, Priority: 1, AuthIDs: map[string]struct{}{"auth-1": {}}})
+	store.UpsertQuota(AccountState{AuthID: "auth-1", AuthIndex: "idx-1", Provider: "codex", LastSuccessAt: now.Add(-time.Hour)})
+	store.MarkAccountTemporaryExhausted("auth-1", now.Add(3*time.Hour), usageLimitReachedReason)
+
+	fresh := accountByAuthID(t, store.Snapshot(now), "auth-1")
+	fresh.Quota = ParsedQuota{
+		Family:     AccountFamilyWeekly,
+		FiveHour:   &QuotaWindow{Kind: WindowFiveHour, UsedPercent: float64Ptr(100), Exhausted: true, ResetAt: now.Add(5 * time.Hour)},
+		LongWindow: &QuotaWindow{Kind: WindowWeekly, UsedPercent: float64Ptr(10), ResetAt: now.Add(72 * time.Hour)},
+	}
+	fresh.Family = AccountFamilyWeekly
+	fresh.LastSuccessAt = now
+	if !store.ApplyQuotaRefreshSuccessIfAdmissionCurrent(fresh, version, now) {
+		t.Fatal("fresh quota refresh was rejected")
+	}
+	account := accountByAuthID(t, store.Snapshot(now), "auth-1")
+	if !account.TemporaryExhausted {
+		t.Fatal("exhausted fresh window incorrectly cleared the temporary-exhaustion marker")
+	}
+}
+
+func TestQuotaRefreshAutoClearsViaLongWindowWhenFiveHourAbsent(t *testing.T) {
+	now := time.Date(2026, 9, 19, 12, 0, 0, 0, time.UTC)
+	store := NewPluginState(DefaultConfig())
+	version := store.ReplaceCPAAdmission(CPAAdmissionState{Observed: true, Priority: 1, AuthIDs: map[string]struct{}{"auth-1": {}}})
+	store.UpsertQuota(AccountState{AuthID: "auth-1", AuthIndex: "idx-1", Provider: "codex", LastSuccessAt: now.Add(-time.Hour)})
+	store.MarkAccountTemporaryExhausted("auth-1", now.Add(3*time.Hour), usageLimitReachedReason)
+
+	fresh := accountByAuthID(t, store.Snapshot(now), "auth-1")
+	fresh.Quota = ParsedQuota{
+		Family:     AccountFamilyWeekly,
+		LongWindow: &QuotaWindow{Kind: WindowWeekly, UsedPercent: float64Ptr(20), ResetAt: now.Add(48 * time.Hour)},
+	}
+	fresh.Family = AccountFamilyWeekly
+	fresh.LastSuccessAt = now
+	if !store.ApplyQuotaRefreshSuccessIfAdmissionCurrent(fresh, version, now) {
+		t.Fatal("fresh quota refresh was rejected")
+	}
+	account := accountByAuthID(t, store.Snapshot(now), "auth-1")
+	if account.TemporaryExhausted {
+		t.Fatalf("temporary exhaustion survived long-window fallback evidence: %#v", account)
+	}
+}

@@ -461,6 +461,18 @@ func (s *PluginState) ApplyQuotaRefreshSuccessIfAdmissionCurrent(account Account
 	if !account.LastSuccessAt.IsZero() && account.LastError == "" {
 		account.Refresh = AccountRefreshState{}
 	}
+	// A successful quota read reconciles a stale temporary-exhaustion marker
+	// when the fresh snapshot carries strict evidence that a real upstream
+	// reset occurred: every known window must show remaining capacity AND the
+	// window identity must have changed since the marker was recorded. A
+	// same-window 100% reading alone does not clear the marker — generic quota
+	// percentages can misreport recovery while model requests still hit
+	// upstream 429 (issue #11's K12 negative control).
+	if account.TemporaryExhausted && quotaRefreshConfirmsReset(account, now) {
+		account.TemporaryExhausted = false
+		account.TemporaryResetAt = time.Time{}
+		account.LastError = ""
+	}
 	applyCircuitSuccess(&account, NormalizeConfig(s.cfg), now)
 	key := accountStateKey(account)
 	if key == "" {
@@ -468,6 +480,29 @@ func (s *PluginState) ApplyQuotaRefreshSuccessIfAdmissionCurrent(account Account
 	}
 	s.accounts[key] = cloneAccountState(account)
 	return true
+}
+
+// quotaRefreshConfirmsReset reports whether a fresh quota snapshot proves an
+// actual upstream reset rather than a same-window misreport. With a five-hour
+// window present, the window's reset deadline must differ from the deadline
+// recorded when the marker was set (a reset mints a new window). Without one,
+// a usable long window that resets after the recorded marker deadline is
+// accepted as the weaker fallback evidence.
+func quotaRefreshConfirmsReset(account AccountState, now time.Time) bool {
+	if account.LastSuccessAt.IsZero() {
+		return false
+	}
+	longWindow := account.Quota.LongWindow
+	if longWindow != nil && !windowShowsRemainingCapacity(longWindow, now) {
+		return false
+	}
+	if fiveHour := account.Quota.FiveHour; fiveHour != nil {
+		if !windowShowsRemainingCapacity(fiveHour, now) {
+			return false
+		}
+		return !fiveHour.ResetAt.Equal(account.TemporaryResetAt)
+	}
+	return longWindow != nil && !longWindow.ResetAt.IsZero() && longWindow.ResetAt.After(account.TemporaryResetAt)
 }
 
 func (s *PluginState) RecordLog(level, event, message string, fields map[string]any, now time.Time) {
