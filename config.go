@@ -56,6 +56,12 @@ type Config struct {
 	// whenever they have a selectable account. Hosts that do not send
 	// across-priority candidates keep single-tier behavior regardless.
 	ScheduleAcrossPriorities bool
+	// EnableManagedQuotaDisable opts in to disabling Codex auths at the CPA
+	// level after a confirmed usage_limit_reached and re-enabling them only
+	// from fresh usable quota. Default false: the feature writes host auth
+	// files.
+	EnableManagedQuotaDisable bool
+	LifecycleEventLimit       int
 
 	// Retry chain. RetryEnabled is the kill switch: when it is false every
 	// request keeps today's behavior. RetryChain is empty by default, which is
@@ -120,6 +126,8 @@ type rawConfig struct {
 	MaxLogEntries                   *int   `yaml:"max_log_entries"`
 	LogRetention                    string `yaml:"log_retention"`
 	ScheduleAcrossPriorities        *bool  `yaml:"schedule_across_priorities"`
+	EnableManagedQuotaDisable       *bool  `yaml:"enable_managed_quota_disable"`
+	LifecycleEventLimit             *int   `yaml:"lifecycle_event_limit"`
 
 	RetryEnabled        *bool           `yaml:"retry_enabled"`
 	RetryShadow         *bool           `yaml:"retry_shadow"`
@@ -155,6 +163,8 @@ func DefaultConfig() Config {
 		MaxLogEntries:                   200,
 		LogRetention:                    24 * time.Hour,
 		ScheduleAcrossPriorities:        true,
+		EnableManagedQuotaDisable:       false,
+		LifecycleEventLimit:             50,
 
 		RetryEnabled:        false,
 		RetryShadow:         false,
@@ -373,6 +383,15 @@ func DecodeConfig(raw []byte) (Config, error) {
 	}
 	if decoded.ScheduleAcrossPriorities != nil {
 		cfg.ScheduleAcrossPriorities = *decoded.ScheduleAcrossPriorities
+	}
+	if decoded.EnableManagedQuotaDisable != nil {
+		cfg.EnableManagedQuotaDisable = *decoded.EnableManagedQuotaDisable
+	}
+	if decoded.LifecycleEventLimit != nil {
+		if *decoded.LifecycleEventLimit <= 0 {
+			return Config{}, fmt.Errorf("lifecycle_event_limit must be positive")
+		}
+		cfg.LifecycleEventLimit = *decoded.LifecycleEventLimit
 	}
 	if decoded.RetryEnabled != nil {
 		cfg.RetryEnabled = *decoded.RetryEnabled

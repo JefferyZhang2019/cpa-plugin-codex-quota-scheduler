@@ -191,6 +191,27 @@ generic quota percentages alone:
   (observed on K12-plan credentials), so a same-window full reading without the
   window-identity change above is not recovery evidence.
 
+### Managed quota disable and recovery (opt-in)
+
+With `enable_managed_quota_disable` enabled, a confirmed `usage_limit_reached`
+disables the account's CPA credential (`disabled: true` on the auth file) so
+CPA itself stops routing to it. The plugin keeps a durable ownership record
+(keyed by auth index, carrying the credential fingerprint) and re-enables the
+account only after a fresh read-only quota check proves BOTH windows usable.
+
+Safety rules:
+
+- a manually disabled account is never adopted or re-enabled;
+- recovery never enables from elapsed time alone;
+- the ownership fingerprint must still match — a rotated credential under the
+  same auth file is left for the operator;
+- planned records interrupted by a crash are reconciled on the next pass;
+- the feature is off by default because it writes host auth files.
+
+The account cards show the managed-disable state and next check time.
+Ported from dos1989's managed-quota-recovery fork (MIT) with the fingerprint
+matching, five-hour-window evidence, and crash reconciliation added.
+
 ### Reset-window activation
 
 OpenAI may report that a quota reset time has passed without creating the next

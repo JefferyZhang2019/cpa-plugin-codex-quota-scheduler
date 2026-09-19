@@ -255,6 +255,18 @@ func handleUsageHandle(raw []byte) ([]byte, error) {
 	if quotaLimitFeedback && snapshot != nil {
 		publishSchedulerState(globalState, snapshot.ActiveHighestTier, now)
 	}
+	if quotaLimitFeedback {
+		// Managed quota disable runs off the usage hook: no host I/O here, and
+		// the ownership record is persisted before the auth file changes.
+		if event, ok := DetectQuotaFailure(record, now); ok {
+			refresherMu.Lock()
+			refresher := globalRefresher
+			refresherMu.Unlock()
+			if refresher != nil {
+				go func() { _ = refresher.ApplyManagedQuotaDisable(context.Background(), event) }()
+			}
+		}
+	}
 	return okEnvelope(map[string]any{})
 }
 
@@ -283,6 +295,11 @@ func handleManagementHandle(raw []byte) ([]byte, error) {
 	if refresher != nil {
 		lifecycle.ResolveCredential = func(ctx context.Context, authID string, action CredentialResolutionAction) error {
 			return refresher.ResolveCredentialAmbiguity(ctx, active, authID, action)
+		}
+		if owner := refresher.lifecycleRefresher(); owner.runtimeStore != nil {
+			if persisted, err := owner.runtimeStore.PersistentSnapshot(); err == nil {
+				lifecycle.ManagedLifecycle = persisted.ManagedLifecycle
+			}
 		}
 	}
 	return okEnvelope(HandleManagementRequestWithLifecycle(globalState, req, now, lifecycle))

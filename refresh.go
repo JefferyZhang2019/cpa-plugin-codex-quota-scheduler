@@ -1331,6 +1331,14 @@ func (r *QuotaRefresher) Start() {
 			}
 			select {
 			case <-timerC:
+				// Managed-quota recovery runs before normal deadlines so
+				// disabled accounts return as soon as their quota recovers,
+				// even while normal refresh is dormant. It routes to the
+				// lifecycle owner, which owns the production runtime store.
+				func() {
+					owner := r.lifecycleRefresher()
+					_ = owner.RecoverManagedQuotaAccounts(context.Background())
+				}()
 				r.refreshController.OnDeadline(r.now())
 				r.RefreshDueSoon()
 				if r.probeController != nil {
@@ -1555,6 +1563,9 @@ func (r *QuotaRefresher) nextRefreshLoopDelay() (time.Duration, bool) {
 	}
 	if legacy := r.state.NextRefreshDueAt(now); !legacy.IsZero() && (deadline.IsZero() || legacy.Before(deadline)) {
 		deadline = legacy
+	}
+	if managed := r.managedRecoveryDeadline(now); !managed.IsZero() && (deadline.IsZero() || managed.Before(deadline)) {
+		deadline = managed
 	}
 	if deadline.IsZero() {
 		return 0, false
