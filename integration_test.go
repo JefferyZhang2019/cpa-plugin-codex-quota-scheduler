@@ -242,6 +242,8 @@ func TestSixAccountIncidentUsesPluginPriorityFallthroughWhenCPAPrioritiesMatch(t
 }
 
 func TestSixAccountIncidentMixedCPAPrioritiesExposeOnlyMaximumTier(t *testing.T) {
+	legacy := DefaultConfig()
+	legacy.ScheduleAcrossPriorities = false
 	now := time.Date(2026, 7, 11, 9, 0, 0, 0, time.UTC)
 	exhaustedA := weeklyAccount("exhausted-a", 1, now.Add(24*time.Hour), true)
 	exhaustedA.Quota.FiveHour.ResetAt = now.Add(time.Hour)
@@ -252,7 +254,7 @@ func TestSixAccountIncidentMixedCPAPrioritiesExposeOnlyMaximumTier(t *testing.T)
 	usableC := weeklyAccount("usable-c", 0, now.Add(18*time.Hour), false)
 	usableD := weeklyAccount("usable-d", 0, now.Add(30*time.Hour), false)
 
-	snapshot := StateSnapshot{Config: DefaultConfig(), Now: now, Accounts: []AccountState{
+	snapshot := StateSnapshot{Config: legacy, Now: now, Accounts: []AccountState{
 		exhaustedA,
 		exhaustedB,
 		usableA,

@@ -51,6 +51,26 @@ func handleMethod(method string, request []byte) ([]byte, error) {
 		return handleSchedulerPick(request)
 	case pluginabi.MethodUsageHandle:
 		return handleUsageHandle(request)
+	case pluginabi.MethodRequestComplete:
+		return handleRequestComplete(request)
+	case pluginabi.MethodResponseInterceptStreamChunk:
+		return handleStreamChunkIntercept(request)
+	case pluginabi.MethodQuotaIdentifier:
+		return okEnvelope(handleQuotaIdentifier())
+	case pluginabi.MethodQuotaDescribe:
+		return okEnvelope(handleQuotaDescribe())
+	case pluginabi.MethodQuotaFetch:
+		return handleQuotaFetchMethod(request, time.Now())
+	case pluginabi.MethodPluginQuiesce:
+		return handlePluginQuiesce()
+	case pluginabi.MethodModelRoute:
+		return routeRetryChain(request)
+	case pluginabi.MethodExecutorIdentifier:
+		return executorIdentifier()
+	case pluginabi.MethodExecutorExecuteStream:
+		return executeRetryChainStream(request)
+	case pluginabi.MethodExecutorExecute, pluginabi.MethodExecutorCountTokens, pluginabi.MethodExecutorHTTPRequest:
+		return executeRetryChainUnsupported(method)
 	case pluginabi.MethodManagementRegister:
 		return okEnvelope(RegisterManagement())
 	case pluginabi.MethodManagementHandle:
@@ -58,6 +78,16 @@ func handleMethod(method string, request []byte) ([]byte, error) {
 	default:
 		return errorEnvelope("unknown_method", "unknown method: "+method), nil
 	}
+}
+
+// activeConfig returns the configuration the plugin is currently running with.
+// A missing value means the plugin has not been registered yet, so the defaults
+// apply; the retry chain is inert by default.
+func activeConfig() Config {
+	if value, ok := currentConfig.Load().(Config); ok {
+		return value
+	}
+	return DefaultConfig()
 }
 
 func configure(raw []byte) error {
@@ -225,6 +255,18 @@ func handleUsageHandle(raw []byte) ([]byte, error) {
 	if quotaLimitFeedback && snapshot != nil {
 		publishSchedulerState(globalState, snapshot.ActiveHighestTier, now)
 	}
+	if quotaLimitFeedback {
+		// Managed quota disable runs off the usage hook: no host I/O here, and
+		// the ownership record is persisted before the auth file changes.
+		if event, ok := DetectQuotaFailure(record, now); ok {
+			refresherMu.Lock()
+			refresher := globalRefresher
+			refresherMu.Unlock()
+			if refresher != nil {
+				go func() { _ = refresher.ApplyManagedQuotaDisable(context.Background(), event) }()
+			}
+		}
+	}
 	return okEnvelope(map[string]any{})
 }
 
@@ -253,6 +295,11 @@ func handleManagementHandle(raw []byte) ([]byte, error) {
 	if refresher != nil {
 		lifecycle.ResolveCredential = func(ctx context.Context, authID string, action CredentialResolutionAction) error {
 			return refresher.ResolveCredentialAmbiguity(ctx, active, authID, action)
+		}
+		if owner := refresher.lifecycleRefresher(); owner.runtimeStore != nil {
+			if persisted, err := owner.runtimeStore.PersistentSnapshot(); err == nil {
+				lifecycle.ManagedLifecycle = persisted.ManagedLifecycle
+			}
 		}
 	}
 	return okEnvelope(HandleManagementRequestWithLifecycle(globalState, req, now, lifecycle))

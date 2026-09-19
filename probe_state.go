@@ -194,6 +194,18 @@ func (c *ProbeController) Advance(i AuthInstanceID, e ProbeEvent) []Intent {
 					strictAuthorized = true
 				}
 			}
+			if e.Kind == ProbeEventVerifyResult && externalResetRebaseApplies(baseline, snap, e.Now) {
+				// A server-side compensating reset minted a fresh never-used
+				// window while our probe was in flight. Rebase the baseline to
+				// the new window instead of classifying the multi-cycle jump as
+				// an anomaly, so the window retries activation on the next
+				// precheck instead of looping in AnomalyHold (Siriussee
+				// fix/prewarm-unused-lazy-windows, adapted to the strict
+				// evidence model: the fresh-window signature below is required).
+				baseline.ResetAt = *snap.ResetAt
+				baseline.Usage = *snap.Usage
+				baseline.SuspectedLazy = true
+			}
 			cl := ClassifyProbeWindow(baseline, snap, e.Now)
 			w.Baseline = cl.Baseline
 			unauthorizedLazy := e.Kind == ProbeEventPrecheckResult && (cl.Kind == ProbeStillLazy || cl.Kind == ProbeAmbiguous) && !strictAuthorized
@@ -308,4 +320,40 @@ func probeBackoff(n int) time.Duration {
 		return 5 * time.Minute
 	}
 	return 15 * time.Minute
+}
+
+// externalResetRebaseApplies reports whether a verify snapshot proves that a
+// server-side compensating reset replaced the observed window mid-probe: the
+// reset jumped forward beyond a full extra window cycle, the snapshot is a
+// fresh never-used window (zero usage, known length, reset one window-length
+// after the observation), and the window kind matches the baseline. Garbage
+// far-future timestamps, backwards jumps, and used windows all fail the
+// signature and keep the conservative anomaly classification.
+func externalResetRebaseApplies(baseline ProbeBaseline, snap QuotaSnapshot, now time.Time) bool {
+	if baseline.Kind != ProbeBaselineReset || !snap.Valid || snap.ResetAt == nil || snap.Usage == nil || *snap.Usage != 0 {
+		return false
+	}
+	forward := snap.ResetAt.After(baseline.ResetAt.Add(probeSkewTolerance))
+	if !forward {
+		return false
+	}
+	delta := snap.ResetAt.Sub(baseline.ResetAt)
+	if baseline.WindowLength > 0 && delta <= 2*baseline.WindowLength {
+		return false
+	}
+	if baseline.WindowLength == 0 && delta <= probeMaxPlausibleWindow {
+		return false
+	}
+	if baseline.WindowKind != "" && snap.WindowKind != baseline.WindowKind {
+		return false
+	}
+	length := baseline.WindowLength
+	if snap.WindowLengthKnown && snap.WindowLength > 0 {
+		length = snap.WindowLength
+	}
+	if length <= 0 {
+		return false
+	}
+	strictWindow := QuotaWindow{Kind: snap.WindowKind, UsedPercent: snap.Usage, ResetAt: *snap.ResetAt}
+	return looksLikeStrictLazyObservation(now, strictWindow, length)
 }

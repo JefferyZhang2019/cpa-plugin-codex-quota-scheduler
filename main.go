@@ -127,6 +127,7 @@ func cliproxy_plugin_init(host *C.cliproxy_host_api, plugin *C.cliproxy_plugin_a
 	hostAPI.Store(host)
 	refresherMu.Lock()
 	callHostCallback = callHostCallbackABI
+	callHostModel = callHostCallbackStatus
 	roster := HostRosterSnapshot{Capability: CapabilityB}
 	if latest := hostRosterLatest.Load(); latest != nil {
 		roster = *latest
@@ -297,14 +298,17 @@ func writeResponse(response *C.cliproxy_buffer, raw []byte) {
 	response.len = C.size_t(len(raw))
 }
 
-func callHostCallbackABI(method string, payload any) (json.RawMessage, error) {
+// hostCallRaw performs one plugin-to-host ABI call and returns the raw response
+// bytes together with the ABI call code. Both the flattened and the
+// status-aware wrappers share this transport.
+func hostCallRaw(method string, payload any) ([]byte, int, error) {
 	host := hostAPI.Load()
 	if host == nil {
-		return nil, fmt.Errorf("host callback %s unavailable", method)
+		return nil, 0, fmt.Errorf("host callback %s unavailable", method)
 	}
 	rawPayload, err := json.Marshal(payload)
 	if err != nil {
-		return nil, fmt.Errorf("marshal host callback payload %s: %w", method, err)
+		return nil, 0, fmt.Errorf("marshal host callback payload %s: %w", method, err)
 	}
 
 	cMethod := C.CString(method)
@@ -315,7 +319,7 @@ func callHostCallbackABI(method string, payload any) (json.RawMessage, error) {
 	if len(rawPayload) > 0 {
 		cPayload := C.CBytes(rawPayload)
 		if cPayload == nil {
-			return nil, fmt.Errorf("allocate host callback payload %s", method)
+			return nil, 0, fmt.Errorf("allocate host callback payload %s", method)
 		}
 		defer C.free(cPayload)
 		requestPtr = (*C.uint8_t)(cPayload)
@@ -330,7 +334,15 @@ func callHostCallbackABI(method string, payload any) (json.RawMessage, error) {
 		C.free_host_buffer(host, response.ptr, response.len)
 	}
 	if len(rawResponse) == 0 {
-		return nil, fmt.Errorf("host callback %s returned no response, code=%d", method, int(callCode))
+		return nil, int(callCode), fmt.Errorf("host callback %s returned no response, code=%d", method, int(callCode))
+	}
+	return rawResponse, int(callCode), nil
+}
+
+func callHostCallbackABI(method string, payload any) (json.RawMessage, error) {
+	rawResponse, callCode, errCall := hostCallRaw(method, payload)
+	if errCall != nil {
+		return nil, errCall
 	}
 
 	var env envelope
@@ -344,7 +356,35 @@ func callHostCallbackABI(method string, payload any) (json.RawMessage, error) {
 		return nil, fmt.Errorf("host callback %s failed", method)
 	}
 	if callCode != 0 {
-		return nil, fmt.Errorf("host callback %s returned code=%d", method, int(callCode))
+		return nil, fmt.Errorf("host callback %s returned code=%d", method, callCode)
+	}
+	return append(json.RawMessage(nil), env.Result...), nil
+}
+
+// callHostCallbackStatus mirrors callHostCallbackABI but keeps the http_status
+// the ABI error envelope carries. The retry chain needs it: a 429 or 503 from a
+// nested attempt must stay distinguishable from a client-side error.
+func callHostCallbackStatus(method string, payload any) (json.RawMessage, error) {
+	rawResponse, callCode, errCall := hostCallRaw(method, payload)
+	if errCall != nil {
+		return nil, errCall
+	}
+	var env abiErrorEnvelope
+	if err := json.Unmarshal(rawResponse, &env); err != nil {
+		return nil, fmt.Errorf("decode host callback envelope %s: %w", method, err)
+	}
+	if !env.OK {
+		if env.Error != nil {
+			return nil, &hostCallError{
+				Code:    strings.TrimSpace(env.Error.Code),
+				Message: strings.TrimSpace(env.Error.Message),
+				Status:  env.Error.HTTPStatus,
+			}
+		}
+		return nil, &hostCallError{Code: "host_call_failed", Message: "host callback " + method + " failed", Status: callCode}
+	}
+	if callCode != 0 {
+		return nil, fmt.Errorf("host callback %s returned code=%d", method, callCode)
 	}
 	return append(json.RawMessage(nil), env.Result...), nil
 }

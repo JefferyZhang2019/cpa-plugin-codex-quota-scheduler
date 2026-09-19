@@ -39,25 +39,36 @@ const (
 )
 
 func HighestPriorityCodexAdmission(req pluginapi.SchedulerPickRequest) (CPAAdmissionState, bool) {
-	admission := CPAAdmissionState{AuthIDs: make(map[string]struct{})}
+	return CodexAdmissionFromRequest(req, false)
+}
+
+// CodexAdmissionFromRequest builds the admission view of a pick request's
+// codex candidates. With acrossPriorities disabled it collapses to the single
+// highest tier (legacy behavior); otherwise it keeps every tier so selection
+// can fall through to lower tiers when higher ones are exhausted.
+func CodexAdmissionFromRequest(req pluginapi.SchedulerPickRequest, acrossPriorities bool) (CPAAdmissionState, bool) {
+	candidates := make([]RosterEntry, 0, len(req.Candidates))
 	for _, candidate := range req.Candidates {
 		if candidate.ID == "" || candidate.Provider != "codex" {
 			continue
 		}
-		if !admission.Observed || candidate.Priority > admission.Priority {
-			admission.Observed = true
-			admission.Priority = candidate.Priority
-			clear(admission.AuthIDs)
-		}
-		if candidate.Priority == admission.Priority {
-			admission.AuthIDs[candidate.ID] = struct{}{}
+		priority := candidate.Priority
+		candidates = append(candidates, RosterEntry{ID: candidate.ID, Provider: candidate.Provider, Priority: &priority})
+	}
+	tiers, ok := CodexTierGroups(candidates)
+	if !ok {
+		return CPAAdmissionState{}, false
+	}
+	if !acrossPriorities {
+		tiers = tiers[:1]
+	}
+	union := make(map[string]struct{})
+	for _, tier := range tiers {
+		for id := range tier.AuthIDs {
+			union[id] = struct{}{}
 		}
 	}
-	if !admission.Observed {
-		admission.AuthIDs = nil
-		return admission, false
-	}
-	return admission, true
+	return CPAAdmissionState{Observed: true, Priority: tiers[0].Priority, AuthIDs: union, Tiers: tiers}, true
 }
 
 func codexCandidateCount(req pluginapi.SchedulerPickRequest) int {
@@ -110,7 +121,7 @@ func BuildOrderedAccounts(req pluginapi.SchedulerPickRequest, snapshot StateSnap
 }
 
 func buildOrderedAccounts(req pluginapi.SchedulerPickRequest, snapshot StateSnapshot, now time.Time, trials *TrialRegistry) []ScheduledAccount {
-	admission, ok := HighestPriorityCodexAdmission(req)
+	admission, ok := CodexAdmissionFromRequest(req, snapshot.Config.ScheduleAcrossPriorities)
 	if !ok {
 		return nil
 	}
@@ -125,11 +136,18 @@ func buildOrderedAccounts(req pluginapi.SchedulerPickRequest, snapshot StateSnap
 
 	ordered := make([]ScheduledAccount, 0, len(req.Candidates))
 	seen := make(map[string]struct{}, len(req.Candidates))
+	priorityByAuthID := make(map[string]int, len(admission.AuthIDs))
+	for _, tier := range admission.Tiers {
+		for id := range tier.AuthIDs {
+			// Keep the highest tier when a duplicate candidate appears at
+			// several priorities.
+			if existing, ok := priorityByAuthID[id]; !ok || tier.Priority > existing {
+				priorityByAuthID[id] = tier.Priority
+			}
+		}
+	}
 	for _, candidate := range req.Candidates {
 		if candidate.ID == "" || candidate.Provider != "codex" {
-			continue
-		}
-		if candidate.Priority != admission.Priority {
 			continue
 		}
 		if _, ok := admission.AuthIDs[candidate.ID]; !ok {
@@ -139,12 +157,16 @@ func buildOrderedAccounts(req pluginapi.SchedulerPickRequest, snapshot StateSnap
 			continue
 		}
 		seen[candidate.ID] = struct{}{}
+		candidatePriority, ok := priorityByAuthID[candidate.ID]
+		if !ok {
+			candidatePriority = candidate.Priority
+		}
 
 		account, ok := accountsByAuthID[candidate.ID]
 		if !ok {
 			ordered = append(ordered, ScheduledAccount{
 				AuthID:            candidate.ID,
-				CPAPriority:       candidate.Priority,
+				CPAPriority:       candidatePriority,
 				Family:            AccountFamilyUnknown,
 				QueueStatus:       QueueStatusUnavailable,
 				UnavailableReason: "unknown_account",
@@ -156,6 +178,9 @@ func buildOrderedAccounts(req pluginapi.SchedulerPickRequest, snapshot StateSnap
 
 		queueStatus, available, reason, sortTime := accountQueueState(account, now)
 		view := accountViewFromState(account, snapshot.Config, now, trials)
+		// The request's candidate priority is the live tier truth; the stored
+		// account priority can lag an admission update.
+		view.CPAPriority = candidatePriority
 		selectionClass := ClassifyAccount(view, now)
 		if selectionClass == Excluded && available && view.Trial != TrialNone {
 			queueStatus = QueueStatusUnavailable
@@ -165,7 +190,7 @@ func buildOrderedAccounts(req pluginapi.SchedulerPickRequest, snapshot StateSnap
 		}
 		ordered = append(ordered, ScheduledAccount{
 			AuthID:            candidate.ID,
-			CPAPriority:       candidate.Priority,
+			CPAPriority:       candidatePriority,
 			SchedulerPriority: account.Annotation.SchedulerPriority,
 			Family:            account.Family,
 			QueueStatus:       queueStatus,
@@ -184,6 +209,12 @@ func buildOrderedAccounts(req pluginapi.SchedulerPickRequest, snapshot StateSnap
 			return left.selectionClass < right.selectionClass
 		}
 		if left.selectionClass != Excluded {
+			// Higher CPA priority tiers lead within an availability class so a
+			// lower tier is only reached when higher tiers have no selectable
+			// account.
+			if left.CPAPriority != right.CPAPriority {
+				return left.CPAPriority > right.CPAPriority
+			}
 			return accountViewLess(left.selectionView, right.selectionView, snapshot.Config.MonthlyMode)
 		}
 		if !left.SortTime.Equal(right.SortTime) {

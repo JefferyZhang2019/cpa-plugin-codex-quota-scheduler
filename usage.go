@@ -68,6 +68,10 @@ func HandleUsageFeedback(state *PluginState, record pluginapi.UsageRecord, now t
 		return
 	}
 	if record.Provider == "codex" && !record.Failed {
+		// Real responses may carry an embedded quota snapshot (usage-record
+		// response headers on the WebSocket transport); observing it keeps the
+		// cache fresh and defers polling.
+		applyObservedCodexHeaders(state, record, now)
 		recordSuccess, temporaryActive := shouldRecordCircuitSuccess(state, record, now)
 		if !recordSuccess {
 			return

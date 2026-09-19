@@ -713,7 +713,7 @@ func TestStatusHTMLUsesManagementAPIActionsModalProgressAndLogs(t *testing.T) {
 	}
 	html := string(resp.Body)
 	lower := strings.ToLower(html)
-	for _, want := range []string{"quota-bar", "editDialog", "logList", "openEdit", "exportLogs", "codex-quota-scheduler-logs.json", "maxLogEntries", "logRetention", "refreshOneQuota", "refreshStatus", "renderAccounts", "renderMetrics", "metricNextAuthID", "metricMonthlyMode", "metricLastSelected", "managementKeyField", "managementKey", "rememberManagementKey", "MANAGEMENT_KEY_STORAGE_KEY", "restoreRememberedManagementKey", "syncRememberedManagementKey", "syncManagementKeyVisibility", "field.hidden=remember.checked", "codex-quota-scheduler-management-key-v1", "loadStatus", "MANAGEMENT_BASE", "/v0/management/plugins/codex-quota-scheduler", "authHeaders()", "localeSelect", "TRANSLATIONS", "codex-quota-scheduler-locale-v1", "Scheduler Settings", "Account Queue", "INLINE_TRANSLATIONS", "Reset credits", "Refresh Quota", "editSchedulerPriority", "account.schedulerPriority", "scheduler_priority", "Plugin priority", "插件优先级", "quotaResetTime", "resetRemainingText", "Math.floor(remaining/minute)", "Math.floor(remaining/hour)", "Math.floor(remaining/day)", "已到期", "quota-remaining", "quota-reset-label", "formatQuotaResetLabels", "label+' reset: '", "SORTED_INLINE_TRANSLATIONS", "right[0].length-left[0].length", "Circuit counts", "localeColon", "resetCreditCount", "Number(value)===1?'time':'times'", "data-i18n-aria", "queue.aria", "renderAccounts(STATUS.accounts||[])", "log.quota.refresh_success", "log.scheduler.fallback", "notice.dataset.i18nKey", "date.toLocaleString(dateLocale()", "storedLocale", "parentLocale", "window.parent.document.documentElement.lang", "watchParentLocale", "if(storedLocale())return", "attributeFilter:['lang']", "detectLocale(){return storedLocale()||parentLocale()||'en'}", `id="editSchedulerPriority"`} {
+	for _, want := range []string{"quota-bar", "editDialog", "logList", "openEdit", "exportLogs", "codex-quota-scheduler-logs.json", "maxLogEntries", "logRetention", "refreshOneQuota", "refreshStatus", "renderAccounts", "renderMetrics", "metricNextAuthID", "metricMonthlyMode", "metricLastSelected", "managementKeyField", "managementKey", "rememberManagementKey", "MANAGEMENT_KEY_STORAGE_KEY", "restoreRememberedManagementKey", "syncRememberedManagementKey", "syncManagementKeyVisibility", "showManagementKeyInput", "restoredManagementKey", "field.hidden=remember.checked&&restoredManagementKey", "togglePin", "createPinButton", "priority=pinned?0:999", "actions.pinAccount", "actions.unpinAccount", "notice.accountPinned", "notice.accountUnpinned", "codex-quota-scheduler-management-key-v1", "loadStatus", "MANAGEMENT_BASE", "/v0/management/plugins/codex-quota-scheduler", "authHeaders()", "localeSelect", "TRANSLATIONS", "codex-quota-scheduler-locale-v1", "Scheduler Settings", "Account Queue", "INLINE_TRANSLATIONS", "Reset credits", "Refresh Quota", "editSchedulerPriority", "account.schedulerPriority", "scheduler_priority", "Plugin priority", "插件优先级", "quotaResetTime", "resetRemainingText", "Math.floor(remaining/minute)", "Math.floor(remaining/hour)", "Math.floor(remaining/day)", "已到期", "quota-remaining", "quota-reset-label", "formatQuotaResetLabels", "label+' reset: '", "SORTED_INLINE_TRANSLATIONS", "right[0].length-left[0].length", "Circuit counts", "localeColon", "resetCreditCount", "Number(value)===1?'time':'times'", "data-i18n-aria", "queue.aria", "renderAccounts(STATUS.accounts||[])", "log.quota.refresh_success", "log.scheduler.fallback", "notice.dataset.i18nKey", "date.toLocaleString(dateLocale()", "storedLocale", "parentLocale", "window.parent.document.documentElement.lang", "watchParentLocale", "if(storedLocale())return", "attributeFilter:['lang']", "detectLocale(){return storedLocale()||parentLocale()||'en'}", `id="editSchedulerPriority"`} {
 		if !strings.Contains(html, want) {
 			t.Fatalf("html missing marker %q: %s", want, html)
 		}
@@ -814,7 +814,9 @@ func TestStatusPageValidatesSchedulerPriorityBeforePatch(t *testing.T) {
 		t.Fatal("page still coerces invalid scheduler priority to zero")
 	}
 	validation := strings.Index(page, "if(!Number.isSafeInteger(schedulerPriority))")
-	patch := strings.Index(page, "requestManagement('/annotations/account'")
+	// Anchor on the save-account PATCH body (togglePin sends scheduler_priority:priority
+	// and needs no user-input validation).
+	patch := strings.Index(page, "scheduler_priority:schedulerPriority}")
 	if validation < 0 || patch < 0 || validation > patch {
 		t.Fatalf("scheduler priority validation must return before PATCH: validation=%d patch=%d", validation, patch)
 	}
@@ -2060,5 +2062,73 @@ func TestAnnotationsPersistenceFailureDoesNotMutateMemory(t *testing.T) {
 			}
 			tt.check(t, state)
 		})
+	}
+}
+
+// The management page ships inside the plugin binary, so an upgraded plugin
+// must not leave a browser holding a previous release's markup, scripts, and
+// validation rules. And because the page validates the retry budgets it just
+// loaded, its grammar has to accept the exact strings the API hands it.
+func TestManagementHTMLIsUncacheableAndAcceptsItsOwnRetryBudgets(t *testing.T) {
+	store := NewPluginState(DefaultConfig())
+	paths := []string{
+		managementBasePath + "/status",
+		"/v0/resource/plugins/codex-quota-scheduler/status",
+	}
+	for _, path := range paths {
+		resp := HandleManagementRequest(store, pluginapi.ManagementRequest{
+			Method: http.MethodGet,
+			Path:   path,
+		}, time.Now())
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("%s: StatusCode = %d, want %d; body=%s", path, resp.StatusCode, http.StatusOK, resp.Body)
+		}
+		if got := resp.Headers.Get("Content-Type"); got != "text/html; charset=utf-8" {
+			t.Fatalf("%s: Content-Type = %q, want text/html", path, got)
+		}
+		if got := resp.Headers.Get("Cache-Control"); !strings.Contains(got, "no-store") {
+			t.Fatalf("%s: Cache-Control = %q, want no-store", path, got)
+		}
+		if got := resp.Headers.Get("Pragma"); got != "no-cache" {
+			t.Fatalf("%s: Pragma = %q, want no-cache", path, got)
+		}
+	}
+
+	page := string(RenderStatusHTML(BuildStatusShellPayload(time.Now())))
+
+	// The page validator accepts the seconds form that formatRetryDuration emits.
+	if !strings.Contains(page, `RETRY_DURATION_RE=/^(\d+(\.\d+)?(ns|us|µs|ms|s|m|h))+$/i`) {
+		t.Fatalf("retry duration grammar is missing or stricter than the API output form")
+	}
+	// A bare number is read as seconds instead of being rejected.
+	if !strings.Contains(page, "function retryNormalizeDuration(") || !strings.Contains(page, "function retryDurationValue(") {
+		t.Fatalf("retry duration inputs do not normalize bare seconds")
+	}
+	// Budget fields carry unit hints so the accepted form is visible.
+	for _, want := range []string{`id="retryStallTimeout" spellcheck="false" placeholder="60s"`, `id="retryChainDeadline" spellcheck="false" placeholder="240s"`} {
+		if !strings.Contains(page, want) {
+			t.Fatalf("retry page missing budget hint %q", want)
+		}
+	}
+	// Failures name the offending field and value instead of only the rule.
+	if !strings.Contains(page, "function retryProblemMessage(problem)") {
+		t.Fatalf("retry page does not report which budget failed")
+	}
+	for _, want := range []string{
+		`id="retryCheckCPA"`,
+		"function checkAndFixCPASettings()",
+		"function requestManagementText(",
+		"function cpaVersionAtLeast(",
+		"v7.3.4",
+		"stream-bootstrap-buffering",
+		"stream-bootstrap-timeout",
+		"bootstrap-retries",
+		"function renumberRetryFallbacks(",
+		"for(const container of document.querySelectorAll('.retryFallbacks'))",
+		"log.retry.attempt_started",
+	} {
+		if !strings.Contains(page, want) {
+			t.Fatalf("retry page missing implementation marker %q", want)
+		}
 	}
 }

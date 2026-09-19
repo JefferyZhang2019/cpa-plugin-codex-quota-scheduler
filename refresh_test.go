@@ -491,7 +491,9 @@ func TestRefreshDueCandidatesOnceUsesActivePriorityCandidates(t *testing.T) {
 		},
 		httpBody: []byte(`{"rate_limit":{"primary_window":{"used_percent":10,"limit_window_seconds":18000,"reset_after_seconds":3600},"secondary_window":{"used_percent":20,"limit_window_seconds":604800,"reset_after_seconds":86400}}}`),
 	}
-	store := NewPluginState(DefaultConfig())
+	legacy := DefaultConfig()
+	legacy.ScheduleAcrossPriorities = false
+	store := NewPluginState(legacy)
 	store.RecordCodexActivity(now)
 	store.UpsertQuota(AccountState{AuthID: "high", AuthIndex: "idx-high", Provider: "codex", LastSuccessAt: now.Add(-6 * time.Hour), Priority: 10})
 	store.UpsertQuota(AccountState{AuthID: "low", AuthIndex: "idx-low", Provider: "codex", LastSuccessAt: now.Add(-6 * time.Hour), Priority: 1})
@@ -2062,7 +2064,10 @@ func TestRefreshOneOverridesHostUnavailableAndRecoversTemporaryExhausted(t *test
 		authJSON: map[string]json.RawMessage{
 			"idx-team": json.RawMessage(`{"access_token":"access-team","id_token":"` + token + `"}`),
 		},
-		httpBody: []byte(`{"rate_limit":{"primary_window":{"used_percent":0,"limit_window_seconds":18000,"reset_after_seconds":18000},"secondary_window":{"used_percent":5,"limit_window_seconds":604800,"reset_after_seconds":86400}}}`),
+		// Same-window full reading (reset stays at the marker's deadline, now+3h):
+		// the automatic window-identity reconciliation deliberately declines, and
+		// only the operator-requested refresh clears the marker.
+		httpBody: []byte(`{"rate_limit":{"primary_window":{"used_percent":0,"limit_window_seconds":18000,"reset_after_seconds":10800},"secondary_window":{"used_percent":5,"limit_window_seconds":604800,"reset_after_seconds":86400}}}`),
 	}
 	store := NewPluginState(DefaultConfig())
 	store.RecordCodexActivity(now)

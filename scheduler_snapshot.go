@@ -136,7 +136,7 @@ func accountViewFromState(a AccountState, cfg Config, now time.Time, trials *Tri
 	}
 	return AccountView{
 		ID: a.AuthID, AuthIndex: a.AuthIndex, Instance: a.Instance,
-		PluginPriority: a.Annotation.SchedulerPriority, Family: a.Family,
+		PluginPriority: a.Annotation.SchedulerPriority, CPAPriority: a.Priority, Family: a.Family,
 		Cache: cache, LastKnownAvailable: a.LastError == "", Exhausted: exhausted,
 		ResetAt: reset, AuthBlocked: a.Refresh.AuthFailure, Circuit: circuitClass,
 		TemporaryUnavailable: a.TemporaryExhausted && a.TemporaryResetAt.After(now),

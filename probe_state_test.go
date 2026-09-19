@@ -206,3 +206,68 @@ func TestSuiteProbe(t *testing.T) {
 	t.Run("state", TestProbeControllerPersistentStateSetAndIllegalNoop)
 	t.Run("dormant", TestProbeControllerDormantDeadlineStillEmitsProbe)
 }
+
+func TestVerifyExternalResetRebasesInsteadOfAnomalyHold(t *testing.T) {
+	now := time.Date(2026, 9, 19, 12, 0, 0, 0, time.UTC)
+	c := NewProbeController(now)
+	// Baseline reset deadline was 2 days ago; the server minted a fresh
+	// never-used five-hour window while our probe was in flight (reset now+5h,
+	// zero usage, known length) — a multi-cycle forward jump.
+	base := ResetProbeBaseline(now.Add(-48*time.Hour), 30, 5*time.Hour)
+	base.WindowKind = WindowFiveHour
+	c.SetWindow(1, ProbeWindowFiveHour, ProbeWindow{State: ProbeSentUnknown, Baseline: base, AttemptID: "probe-1"})
+	freshReset := now.Add(5 * time.Hour)
+	length := 5 * time.Hour
+	c.Advance(1, ProbeEvent{Kind: ProbeEventVerifyResult, Window: ProbeWindowFiveHour, Now: now, Snapshots: map[ProbeWindowKind]QuotaSnapshot{
+		ProbeWindowFiveHour: {Valid: true, WindowKind: WindowFiveHour, ResetAt: &freshReset, Usage: ptrFloat(0), WindowLength: length, WindowLengthKnown: true},
+	}})
+	window, _ := c.Window(1, ProbeWindowFiveHour)
+	if window.State == ProbeAnomalyHold {
+		t.Fatalf("external compensating reset landed in AnomalyHold: %#v", window)
+	}
+	if window.State != ProbeRetryWait {
+		t.Fatalf("State = %s, want ProbeRetryWait to retry activation on the next precheck", window.State)
+	}
+	if !window.Baseline.ResetAt.Equal(freshReset) {
+		t.Fatalf("baseline ResetAt = %s, want rebased to %s", window.Baseline.ResetAt, freshReset)
+	}
+	if !window.Baseline.SuspectedLazy {
+		t.Fatal("rebased baseline should be SuspectedLazy so the next precheck re-authorizes")
+	}
+}
+
+func TestVerifyKeepsAnomalyForGarbageForwardJump(t *testing.T) {
+	now := time.Date(2026, 9, 19, 12, 0, 0, 0, time.UTC)
+	c := NewProbeController(now)
+	base := ResetProbeBaseline(now.Add(-time.Hour), 30, 5*time.Hour)
+	base.WindowKind = WindowFiveHour
+	c.SetWindow(1, ProbeWindowFiveHour, ProbeWindow{State: ProbeSentUnknown, Baseline: base, AttemptID: "probe-1"})
+	// 15-day forward reset with zero usage: not a fresh-window signature.
+	garbageReset := now.Add(15 * 24 * time.Hour)
+	length := 5 * time.Hour
+	c.Advance(1, ProbeEvent{Kind: ProbeEventVerifyResult, Window: ProbeWindowFiveHour, Now: now, Snapshots: map[ProbeWindowKind]QuotaSnapshot{
+		ProbeWindowFiveHour: {Valid: true, WindowKind: WindowFiveHour, ResetAt: &garbageReset, Usage: ptrFloat(0), WindowLength: length, WindowLengthKnown: true},
+	}})
+	window, _ := c.Window(1, ProbeWindowFiveHour)
+	if window.State != ProbeAnomalyHold {
+		t.Fatalf("State = %s, want ProbeAnomalyHold for a garbage far-future reset", window.State)
+	}
+}
+
+func TestVerifyKeepsAnomalyForUsedWindowForwardJump(t *testing.T) {
+	now := time.Date(2026, 9, 19, 12, 0, 0, 0, time.UTC)
+	c := NewProbeController(now)
+	base := ResetProbeBaseline(now.Add(-2*5*time.Hour), 30, 5*time.Hour)
+	base.WindowKind = WindowFiveHour
+	c.SetWindow(1, ProbeWindowFiveHour, ProbeWindow{State: ProbeSentUnknown, Baseline: base, AttemptID: "probe-1"})
+	// Multi-cycle forward jump but the window is used: not a fresh window.
+	usedReset := now.Add(5 * time.Hour)
+	length := 5 * time.Hour
+	c.Advance(1, ProbeEvent{Kind: ProbeEventVerifyResult, Window: ProbeWindowFiveHour, Now: now, Snapshots: map[ProbeWindowKind]QuotaSnapshot{
+		ProbeWindowFiveHour: {Valid: true, WindowKind: WindowFiveHour, ResetAt: &usedReset, Usage: ptrFloat(40), WindowLength: length, WindowLengthKnown: true},
+	}})
+	window, _ := c.Window(1, ProbeWindowFiveHour)
+	if window.State != ProbeAnomalyHold {
+		t.Fatalf("State = %s, want ProbeAnomalyHold for a used-window multi-cycle jump", window.State)
+	}
+}

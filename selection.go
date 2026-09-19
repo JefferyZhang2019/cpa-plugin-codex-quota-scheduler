@@ -43,6 +43,7 @@ type AccountView struct {
 	AuthIndex            string
 	Instance             AuthInstanceID
 	PluginPriority       int
+	CPAPriority          int
 	Family               AccountFamily
 	Cache                CacheClass
 	LastKnownAvailable   bool
@@ -134,6 +135,12 @@ func selectAccountSkipping(snapshot SchedulerSnapshot, candidates []Candidate, n
 }
 
 func accountViewLess(a, b AccountView, mode MonthlyMode) bool {
+	// CPA priority tiers lead within an availability class: a lower tier is
+	// only reached when higher tiers have no selectable account. Single-tier
+	// deployments see no change (equal priorities fall through).
+	if a.CPAPriority != b.CPAPriority {
+		return a.CPAPriority > b.CPAPriority
+	}
 	if a.PluginPriority != b.PluginPriority {
 		return a.PluginPriority > b.PluginPriority
 	}

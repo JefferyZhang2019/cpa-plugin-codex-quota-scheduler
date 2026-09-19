@@ -7,7 +7,39 @@ provides a quota-aware, optimized Fill First scheduler for Codex accounts, so
 CPA selects accounts by real usability instead of relying on a static account
 order alone.
 
-## v0.2.2 Highlights
+## v0.3.0 Highlights
+
+- Built on the CPA v7.3 plugin SDK (schema 6): raw-JSON management responses,
+  official request lifecycle events, and the QuotaProvider interface exposing
+  cached Codex quota to CPA management clients.
+- Quota is now observed from real response streams: a strictly read-only
+  stream-chunk interceptor parses `codex.rate_limits` frames, and successful
+  usage records consume the host-normalized `X-Codex-*` snapshot. Observations
+  refresh the cache, defer polling, and carry window-identity evidence into
+  the temporary-exhaustion reconciliation. The UI shows each account's quota
+  source.
+- Temporary-exhaustion markers now clear automatically when a fresh quota read
+  proves an actual upstream reset (window identity changed and every known
+  window has capacity), in addition to real-request success and the
+  operator-confirmed manual refresh. Same-window percentages alone still never
+  clear anything.
+- Optional per-model retry chain with failover (Live / Shadow / Always modes)
+  for retryable upstream failures before any content is committed, ported from
+  doer-ee's Codex Fleet Manager (MIT). Disabled by default.
+- Schedule across CPA priority tiers: with `schedule_across_priorities`
+  (default on) a lower tier is selected when every higher tier is exhausted,
+  instead of delegating to the built-in scheduler.
+- Opt-in managed quota disable and recovery lane (429 → CPA-level disable →
+  read-only polling → verified re-enable) with credential-fingerprint
+  ownership, ported from dos1989's fork (MIT) and hardened.
+- Probe hardening from Siriussee's fork: ambiguous sends recover without an
+  unrelated wake, and a mid-probe server-side compensating reset rebases the
+  baseline instead of looping in AnomalyHold. The probe model moves to
+  gpt-5.6-luna.
+- Management UI: account pin toggle, remembered-key reveal on auth failure,
+  per-account quota source, and managed-disable status.
+
+## v0.3.0 Highlights and later
 
 - Existing installations safely migrate their lazy-reset baselines; fresh
   installations observe the first confirmed lazy reset window before activation.
@@ -45,9 +77,15 @@ accounts passed to the next one.
 - Only candidates whose provider is `codex` are considered. Other providers are
   ignored.
 - A Codex account without an explicit CPA auth priority is treated as priority `0`.
-- The plugin admits every Codex account in the highest confirmed CPA auth
-  priority tier. Lower CPA tiers remain under CPA's own fallback behavior and
-  are not loaded into the plugin queue.
+- With `schedule_across_priorities` enabled (the default, and the mode the
+  v7.3 host feeds with candidates from every tier), the plugin admits Codex
+  accounts from all CPA priority tiers. Higher tiers always win while they have
+  a selectable account; a lower tier is only reached when every higher tier is
+  unavailable, instead of delegating to CPA's built-in fallback. Lower tiers
+  are also refreshed so their availability is known.
+- With `schedule_across_priorities` disabled — or on hosts that only send the
+  highest tier — the plugin admits exactly the highest confirmed tier and lower
+  tiers stay under CPA's own fallback behavior.
 - If all Codex accounts should participate together, give them the same CPA auth
   priority. Priority `0` is the simplest recommended configuration.
 
@@ -130,6 +168,23 @@ Given four admitted Codex accounts, the visible and effective order is:
 Quota refresh reads the current Codex quota state from ChatGPT. It does not send
 an ordinary model request and does not need the Management page to remain open.
 
+Quota data has two sources:
+
+- **Response observation (preferred).** Every Codex response stream carries a
+  `codex.rate_limits` event with the same window data as the quota endpoint,
+  and successful usage records may carry the host-normalized `X-Codex-*`
+  snapshot (WebSocket transport). The plugin registers a strictly read-only
+  stream-chunk interceptor that watches for those frames, attributes them to
+  the serving account, and refreshes its quota cache as a side effect of real
+  traffic. An observation also defers that account's polling refresh and feeds
+  the temporary-exhaustion reconciliation with evidence bound to an actual
+  response. The interceptor never modifies, holds, or delays any stream byte.
+- **Polling fallback.** Accounts without recent observations are refreshed from
+  the generic quota endpoint on the usual cadence.
+
+The Management UI shows each account's quota source (response observation vs
+polled refresh).
+
 During recent Codex activity, accounts are refreshed when their individual
 deadlines become due; the worker does not repeatedly scan every account at a
 fixed global interval. After the active window becomes idle, normal background
@@ -149,15 +204,45 @@ generic quota percentages alone:
 - **A real successful request through the account** clears the marker
   immediately. A later `usage_limit_reached` response re-marks the account with
   a fresh reset time.
+- **Any successful quota refresh clears the marker automatically when the fresh
+  snapshot carries strict reset evidence:** every known window shows remaining
+  capacity AND the five-hour window's reset deadline changed since the marker
+  was recorded (an upstream reset mints a new window). Without a five-hour
+  window, a usable long window that resets after the recorded deadline is
+  accepted as weaker fallback evidence.
 - **A manual per-account refresh from the Management UI** clears the marker when
-  the fresh quota snapshot shows remaining capacity in every known window. The
-  manual action also overrides host-side `disabled`/`unavailable` cooldown
-  flags, so an account can be refreshed after an operator-triggered upstream
-  reset even while CPA still keeps its own cooldown.
-- **Background refresh never clears the marker from percentages alone.** The
-  generic quota endpoint can report 100% remaining while model requests still
-  hit upstream 429 (observed on K12-plan credentials), so automatic recovery
-  requires the real-request evidence above.
+  the fresh quota snapshot shows remaining capacity in every known window —
+  even for a same-window full reading, because the operator explicitly
+  confirmed an upstream reset. The manual action also overrides host-side
+  `disabled`/`unavailable` cooldown flags, so an account can be refreshed after
+  an operator-triggered upstream reset even while CPA still keeps its own
+  cooldown.
+- **Background refresh never clears the marker from same-window percentages
+  alone.** The generic quota endpoint can report 100% remaining on the very
+  window the 429 pointed at while model requests still hit upstream 429
+  (observed on K12-plan credentials), so a same-window full reading without the
+  window-identity change above is not recovery evidence.
+
+### Managed quota disable and recovery (opt-in)
+
+With `enable_managed_quota_disable` enabled, a confirmed `usage_limit_reached`
+disables the account's CPA credential (`disabled: true` on the auth file) so
+CPA itself stops routing to it. The plugin keeps a durable ownership record
+(keyed by auth index, carrying the credential fingerprint) and re-enables the
+account only after a fresh read-only quota check proves BOTH windows usable.
+
+Safety rules:
+
+- a manually disabled account is never adopted or re-enabled;
+- recovery never enables from elapsed time alone;
+- the ownership fingerprint must still match — a rotated credential under the
+  same auth file is left for the operator;
+- planned records interrupted by a crash are reconciled on the next pass;
+- the feature is off by default because it writes host auth files.
+
+The account cards show the managed-disable state and next check time.
+Ported from dos1989's managed-quota-recovery fork (MIT) with the fingerprint
+matching, five-hour-window evidence, and crash reconciliation added.
 
 ### Reset-window activation
 
@@ -277,6 +362,48 @@ log_retention: 24h
 `quota_endpoint` is restricted to the expected ChatGPT quota endpoint and cannot
 be redirected to an arbitrary host.
 
+## Model Retry Chain
+
+The Management UI includes an optional retry chain for upstream capacity and
+transport failures (adopted from doer-ee's Codex Fleet Manager, MIT). When
+enabled, a streaming request that fails before content reaches the client can
+move through configured fallback models. Retryable failures include HTTP 429,
+500, 502, 503, 504, and 529, capacity/overload failures, and equivalent
+transport failures; anything unrecognized fails closed, and a request whose
+content already reached the client is never retried. Each retry attempt is
+re-issued through the host, so the normal scheduler still selects the account
+and usage feedback still applies.
+
+Open the **Model Retry Chain** collapsible section in the sidebar. Each
+requested model can have ordered model-only fallbacks; CPA resolves the
+optional provider. Fallbacks are numbered independently for each requested
+model.
+
+Retry modes are **Live**, **Shadow** (record only, never retry), and **Always
+retry all models**. Always Retry also covers models without a configured
+chain; when no fallback exists, it retries the same model. Shadow and Always
+Retry are mutually exclusive. The section also configures maximum attempts
+(including the first attempt), silence/hold/chain timeouts, frame and byte
+buffers, and whether encrypted reasoning is removed when switching models.
+
+The section can check and repair the CPA prerequisites, but CPA must be
+`v7.3.4` or newer. If values are wrong, it shows an inline comparison table
+with current and recommended values; differences are marked in red. Nothing
+changes until **Apply recommended settings** is selected. The repair
+hot-reloads:
+
+```yaml
+request-retry: 3
+codex:
+  stream-bootstrap-buffering: true
+  stream-bootstrap-timeout: "0"
+streaming:
+  bootstrap-retries: 1
+```
+
+Retry scheduler events are persisted in plugin logs and localized in English
+and Chinese. The chain is disabled by default; enable it explicitly.
+
 ## Management UI
 
 Open **Codex Scheduler** from CPA Management Center, or visit:
@@ -288,11 +415,15 @@ Open **Codex Scheduler** from CPA Management Center, or visit:
 The page provides:
 
 - the production-ordered account queue and next-account preview;
+- separate Account Queue, Settings, and Retry Chain pages rather than placing
+  all settings in the middle column;
 - separate CPA priority and plugin priority indicators;
 - quota bars, reset times, availability reasons, and circuit state;
 - scheduler settings with plain-language safety guidance;
 - aliases, notes, tags, groups, and per-account plugin priority editing;
-- quota refresh, log viewing/export, and configuration import/export; and
+- quota refresh, log viewing/export, and configuration import/export;
+- automatic loading and de-duplication of routable model IDs when opening the
+  Retry Chain page; and
 - English and Chinese interface switching.
 
 The CPA plugin menu API accepts only one static label, so the registered
@@ -358,8 +489,8 @@ make build
 Build release archives and checksums:
 
 ```bash
-make package VERSION=0.2.2
-make checksums VERSION=0.2.2
+make package VERSION=0.3.0
+make checksums VERSION=0.3.0
 ```
 
 Windows users can build `dist/codex-quota-scheduler.dll` with:
@@ -375,8 +506,8 @@ workflow. It tests the repository and publishes platform archives plus
 `checksums.txt`:
 
 ```bash
-git tag -a v0.2.2 -m "v0.2.2"
-git push origin v0.2.2
+git tag -a v0.3.0 -m "v0.3.0"
+git push origin v0.3.0
 ```
 
 Release archives use this naming scheme:
@@ -407,6 +538,22 @@ PUT  /v0/management/plugins/codex-quota-scheduler/annotations
 PATCH /v0/management/plugins/codex-quota-scheduler/annotations/account
 PATCH /v0/management/plugins/codex-quota-scheduler/annotations/group
 ```
+
+## Acknowledgments
+
+This release incorporates work from the plugin's fork community, all MIT:
+
+- **doer-ee / Codex Fleet Manager** — the per-model retry chain with failover,
+  its shadow mode and CPA prerequisite checker, the management-key reveal UX,
+  the account pin toggle, and the probe model update.
+- **dos1989** — the managed quota disable-and-recovery concept and its
+  ownership-record design.
+- **Siriussee** — the ambiguous-send recovery scheduling and the external
+  compensating-reset rebase behavior.
+- **jacobhere (PRs #4–#10)** — quota pressure scheduling, the reset-probe
+  endpoint fix, reset countdowns, UI localization, the English sidebar label,
+  remembered management key, and quota bar color bands.
+- **lawyer61 (PR #12)** — the inflight-limiting design tracked in #13.
 
 ## License
 

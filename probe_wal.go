@@ -125,6 +125,35 @@ func (w *ProbeWAL) Recover(now time.Time) []Intent {
 	out, _ := w.RecoverChecked(now)
 	return out
 }
+
+// RecoveryDeadline returns the earliest VerifyNotBefore among durable attempts
+// that RecoverChecked can recover (Sending, Sent, or SentUnknown). It gives the
+// refresh loop a wake source for windows whose in-memory state
+// (ProbeSentAwaitingVerify / ProbeSentUnknown) contributes no
+// ProbeController.NextDeadline entry, so an ambiguous send cannot sit dormant
+// until an unrelated wake (Siriussee fix/prewarm-unused-lazy-windows, adapted).
+// A zero returned time means an attempt is already recoverable now.
+func (w *ProbeWAL) RecoveryDeadline() (time.Time, bool) {
+	st, err := w.store.PersistentSnapshot()
+	if err != nil {
+		return time.Time{}, false
+	}
+	found := false
+	var out time.Time
+	for _, a := range st.ProbeAttempts {
+		if a.Phase != ProbeAttemptSending && a.Phase != ProbeAttemptSent && a.Phase != ProbeAttemptSentUnknown {
+			continue
+		}
+		if a.VerifyNotBefore.IsZero() {
+			return time.Time{}, true
+		}
+		if !found || a.VerifyNotBefore.Before(out) {
+			out, found = a.VerifyNotBefore, true
+		}
+	}
+	return out, found
+}
+
 func (w *ProbeWAL) RecoverChecked(now time.Time) ([]Intent, error) {
 	st, err := w.store.PersistentSnapshot()
 	if err != nil {

@@ -136,12 +136,14 @@ func TestPickScansLowerPluginTierWhenHigherTierExhausted(t *testing.T) {
 	}
 }
 
-func TestBuildOrderedAccountsKeepsOnlyMaximumCPATier(t *testing.T) {
+func TestBuildOrderedAccountsKeepsOnlyMaximumCPATierWhenAcrossPrioritiesDisabled(t *testing.T) {
 	now := time.Date(2026, 7, 11, 9, 0, 0, 0, time.UTC)
 	highA := weeklyAccount("high-a", 0, now.Add(48*time.Hour), false)
 	highB := weeklyAccount("high-b", 0, now.Add(24*time.Hour), false)
 	low := weeklyAccount("low", 0, now.Add(time.Hour), false)
-	snapshot := StateSnapshot{Config: DefaultConfig(), Now: now, Accounts: []AccountState{highA, highB, low}}
+	cfg := DefaultConfig()
+	cfg.ScheduleAcrossPriorities = false
+	snapshot := StateSnapshot{Config: cfg, Now: now, Accounts: []AccountState{highA, highB, low}}
 	req := pluginapi.SchedulerPickRequest{Provider: "codex", Candidates: []pluginapi.SchedulerAuthCandidate{
 		{ID: "low", Provider: "codex", Priority: 1},
 		{ID: "high-a", Provider: "codex", Priority: 5},
@@ -156,6 +158,39 @@ func TestBuildOrderedAccountsKeepsOnlyMaximumCPATier(t *testing.T) {
 		if account.CPAPriority != 5 {
 			t.Fatalf("account = %#v, want CPA priority 5", account)
 		}
+	}
+}
+
+func TestBuildOrderedAccountsFallsThroughTiersWhenAcrossPrioritiesEnabled(t *testing.T) {
+	now := time.Date(2026, 7, 11, 9, 0, 0, 0, time.UTC)
+	highA := weeklyAccount("high-a", 0, now.Add(48*time.Hour), false)
+	highB := weeklyAccount("high-b", 0, now.Add(24*time.Hour), false)
+	low := weeklyAccount("low", 0, now.Add(time.Hour), false)
+	snapshot := StateSnapshot{Config: DefaultConfig(), Now: now, Accounts: []AccountState{highA, highB, low}}
+	req := pluginapi.SchedulerPickRequest{Provider: "codex", Candidates: []pluginapi.SchedulerAuthCandidate{
+		{ID: "low", Provider: "codex", Priority: 1},
+		{ID: "high-a", Provider: "codex", Priority: 5},
+		{ID: "high-b", Provider: "codex", Priority: 5},
+	}}
+
+	ordered := BuildOrderedAccounts(req, snapshot, now)
+	// Every tier is admitted; the higher tier leads within the availability
+	// class and the lower tier follows.
+	if len(ordered) != 3 || ordered[0].AuthID != "high-b" || ordered[1].AuthID != "high-a" || ordered[2].AuthID != "low" {
+		t.Fatalf("ordered = %#v", ordered)
+	}
+	if ordered[2].CPAPriority != 1 {
+		t.Fatalf("lower tier account = %#v, want its own CPA priority", ordered[2])
+	}
+
+	// With the higher tier exhausted, the lower tier is selected directly
+	// instead of delegating to the built-in scheduler.
+	highA.TemporaryExhausted, highA.TemporaryResetAt = true, now.Add(time.Hour)
+	highB.TemporaryExhausted, highB.TemporaryResetAt = true, now.Add(time.Hour)
+	snapshot.Accounts = []AccountState{highA, highB, low}
+	decision := PickCodexAccount(req, snapshot, now)
+	if decision.AuthID != "low" || !decision.Handled {
+		t.Fatalf("decision = %#v, want lower-tier selection", decision)
 	}
 }
 
@@ -551,6 +586,7 @@ func TestPickDoesNotScanBelowActivePriorityTier(t *testing.T) {
 	now := time.Date(2026, 6, 21, 9, 0, 0, 0, time.UTC)
 	cfg := DefaultConfig()
 	cfg.Fallback = FallbackFillFirst
+	cfg.ScheduleAcrossPriorities = false
 	highStale := weeklyAccount("high-stale", 10, now.Add(time.Hour), false)
 	highStale.Stale = true
 	lowAvailable := weeklyAccount("low-available", 1, now.Add(2*time.Hour), false)
@@ -569,6 +605,31 @@ func TestPickDoesNotScanBelowActivePriorityTier(t *testing.T) {
 	decision := PickCodexAccount(req, snapshot, now)
 	if decision.AuthID != "" || !decision.Handled || decision.DelegateBuiltin != pluginapi.SchedulerBuiltinFillFirst {
 		t.Fatalf("decision = %#v, want fill-first fallback without selecting lower CPA priority", decision)
+	}
+}
+
+func TestPickScansBelowActivePriorityTierWhenAcrossPrioritiesEnabled(t *testing.T) {
+	now := time.Date(2026, 6, 21, 9, 0, 0, 0, time.UTC)
+	cfg := DefaultConfig()
+	cfg.Fallback = FallbackFillFirst
+	highStale := weeklyAccount("high-stale", 10, now.Add(time.Hour), false)
+	highStale.Stale = true
+	lowAvailable := weeklyAccount("low-available", 1, now.Add(2*time.Hour), false)
+	snapshot := StateSnapshot{Config: cfg, Now: now, Accounts: []AccountState{
+		highStale,
+		lowAvailable,
+	}}
+	req := pluginapi.SchedulerPickRequest{
+		Provider: "codex",
+		Candidates: []pluginapi.SchedulerAuthCandidate{
+			{ID: "high-stale", Provider: "codex", Priority: 10, Status: "active"},
+			{ID: "low-available", Provider: "codex", Priority: 1, Status: "active"},
+		},
+	}
+
+	decision := PickCodexAccount(req, snapshot, now)
+	if decision.AuthID != "low-available" || !decision.Handled {
+		t.Fatalf("decision = %#v, want lower-tier selection once the higher tier has no selectable account", decision)
 	}
 }
 

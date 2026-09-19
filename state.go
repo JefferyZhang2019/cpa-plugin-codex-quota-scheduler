@@ -103,16 +103,34 @@ func cloneCPAAdmission(value CPAAdmissionState) CPAAdmissionState {
 			cloned.AuthIDs[authID] = struct{}{}
 		}
 	}
+	for _, tier := range value.Tiers {
+		clonedTier := TierAdmission{Priority: tier.Priority, AuthIDs: make(map[string]struct{}, len(tier.AuthIDs))}
+		for authID := range tier.AuthIDs {
+			clonedTier.AuthIDs[authID] = struct{}{}
+		}
+		cloned.Tiers = append(cloned.Tiers, clonedTier)
+	}
 	return cloned
 }
 
 func equalCPAAdmission(left, right CPAAdmissionState) bool {
-	if left.Observed != right.Observed || left.Priority != right.Priority || len(left.AuthIDs) != len(right.AuthIDs) {
+	if left.Observed != right.Observed || left.Priority != right.Priority || len(left.AuthIDs) != len(right.AuthIDs) || len(left.Tiers) != len(right.Tiers) {
 		return false
 	}
 	for authID := range left.AuthIDs {
 		if _, ok := right.AuthIDs[authID]; !ok {
 			return false
+		}
+	}
+	for i, tier := range left.Tiers {
+		other := right.Tiers[i]
+		if tier.Priority != other.Priority || len(tier.AuthIDs) != len(other.AuthIDs) {
+			return false
+		}
+		for authID := range tier.AuthIDs {
+			if _, ok := other.AuthIDs[authID]; !ok {
+				return false
+			}
 		}
 	}
 	return true
@@ -129,12 +147,25 @@ func (s *PluginState) ReplaceCPAAdmission(value CPAAdmissionState) uint64 {
 	if !value.Observed {
 		return s.cpaAdmissionVersion
 	}
+	priorityByAuthID := make(map[string]int, len(value.AuthIDs))
+	for _, tier := range value.Tiers {
+		for authID := range tier.AuthIDs {
+			priorityByAuthID[authID] = tier.Priority
+		}
+	}
 	for key, account := range s.accounts {
 		if _, ok := value.AuthIDs[account.AuthID]; !ok {
 			delete(s.accounts, key)
 			continue
 		}
-		account.Priority = value.Priority
+		// Accounts keep the priority of their own tier; a single-tier
+		// admission (legacy or across-priorities disabled) overwrites with the
+		// tier priority as before.
+		if tierPriority, ok := priorityByAuthID[account.AuthID]; ok {
+			account.Priority = tierPriority
+		} else {
+			account.Priority = value.Priority
+		}
 		s.accounts[key] = account
 	}
 	return s.cpaAdmissionVersion
@@ -192,7 +223,29 @@ func (s *PluginState) AdmittedCPAPriorityVersioned(authID string) (int, uint64, 
 		return 0, s.cpaAdmissionVersion, false
 	}
 	_, ok := s.cpaAdmission.AuthIDs[authID]
-	return s.cpaAdmission.Priority, s.cpaAdmissionVersion, ok
+	if !ok {
+		return 0, s.cpaAdmissionVersion, false
+	}
+	// The account's own tier decides its priority; single-tier admissions
+	// (legacy or across-priorities disabled) keep the top priority.
+	for _, tier := range s.cpaAdmission.Tiers {
+		if _, inTier := tier.AuthIDs[authID]; inTier {
+			return tier.Priority, s.cpaAdmissionVersion, true
+		}
+	}
+	return s.cpaAdmission.Priority, s.cpaAdmissionVersion, true
+}
+
+// admissionPriorityLocked returns the priority of the account's own tier,
+// falling back to the admission's top priority for single-tier admissions.
+// Callers must hold s.mu.
+func (s *PluginState) admissionPriorityLocked(authID string) int {
+	for _, tier := range s.cpaAdmission.Tiers {
+		if _, inTier := tier.AuthIDs[authID]; inTier {
+			return tier.Priority
+		}
+	}
+	return s.cpaAdmission.Priority
 }
 
 func (s *PluginState) CPAAdmissionVersionCurrent(version uint64) bool {
@@ -313,6 +366,47 @@ func (s *PluginState) ClearAccountTemporaryExhausted(authID string) bool {
 	return true
 }
 
+// ObserveAccountQuota merges quota state observed inside a real response
+// stream into the cached account. An observation is bound to an actual call,
+// so it both refreshes the cache (deferring the polling refresh) and runs the
+// same window-identity reconciliation as a polled refresh. Only the windows
+// present in the observation are overwritten; everything else is preserved.
+func (s *PluginState) ObserveAccountQuota(authID, authIndex string, quota ParsedQuota, now time.Time) (AccountState, bool) {
+	if authID == "" && authIndex == "" {
+		return AccountState{}, false
+	}
+	if now.IsZero() {
+		now = time.Now()
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	key, account, ok := s.findAccountLocked(authID, authIndex)
+	if !ok {
+		return AccountState{}, false
+	}
+	if quota.FiveHour != nil {
+		account.Quota.FiveHour = quota.FiveHour
+	}
+	if quota.LongWindow != nil {
+		account.Quota.LongWindow = quota.LongWindow
+	}
+	if quota.Family != "" {
+		account.Quota.Family = quota.Family
+		account.Family = quota.Family
+	}
+	account.LastRefreshAt = now
+	account.LastSuccessAt = now
+	account.LastObservedAt = now
+	account.Stale = false
+	if account.TemporaryExhausted && quotaRefreshConfirmsReset(account, now) {
+		account.TemporaryExhausted = false
+		account.TemporaryResetAt = time.Time{}
+		account.LastError = ""
+	}
+	s.accounts[key] = account
+	return cloneAccountState(account), true
+}
+
 func (s *PluginState) findAccountLocked(authID, authIndex string) (string, AccountState, bool) {
 	if authID != "" {
 		if account, ok := s.accounts["auth:"+authID]; ok {
@@ -428,7 +522,7 @@ func (s *PluginState) ApplyQuotaRefreshFailureIfAdmissionCurrent(account Account
 	if !s.admissionCurrentLocked(account.AuthID, version) {
 		return false
 	}
-	account.Priority = s.cpaAdmission.Priority
+	account.Priority = s.admissionPriorityLocked(account.AuthID)
 	account.LastError = message
 	account.Refresh.LastFailureKind = kind
 	account.Refresh.LastFailureAt = now
@@ -457,9 +551,21 @@ func (s *PluginState) ApplyQuotaRefreshSuccessIfAdmissionCurrent(account Account
 	if !s.admissionCurrentLocked(account.AuthID, version) {
 		return false
 	}
-	account.Priority = s.cpaAdmission.Priority
+	account.Priority = s.admissionPriorityLocked(account.AuthID)
 	if !account.LastSuccessAt.IsZero() && account.LastError == "" {
 		account.Refresh = AccountRefreshState{}
+	}
+	// A successful quota read reconciles a stale temporary-exhaustion marker
+	// when the fresh snapshot carries strict evidence that a real upstream
+	// reset occurred: every known window must show remaining capacity AND the
+	// window identity must have changed since the marker was recorded. A
+	// same-window 100% reading alone does not clear the marker — generic quota
+	// percentages can misreport recovery while model requests still hit
+	// upstream 429 (issue #11's K12 negative control).
+	if account.TemporaryExhausted && quotaRefreshConfirmsReset(account, now) {
+		account.TemporaryExhausted = false
+		account.TemporaryResetAt = time.Time{}
+		account.LastError = ""
 	}
 	applyCircuitSuccess(&account, NormalizeConfig(s.cfg), now)
 	key := accountStateKey(account)
@@ -468,6 +574,29 @@ func (s *PluginState) ApplyQuotaRefreshSuccessIfAdmissionCurrent(account Account
 	}
 	s.accounts[key] = cloneAccountState(account)
 	return true
+}
+
+// quotaRefreshConfirmsReset reports whether a fresh quota snapshot proves an
+// actual upstream reset rather than a same-window misreport. With a five-hour
+// window present, the window's reset deadline must differ from the deadline
+// recorded when the marker was set (a reset mints a new window). Without one,
+// a usable long window that resets after the recorded marker deadline is
+// accepted as the weaker fallback evidence.
+func quotaRefreshConfirmsReset(account AccountState, now time.Time) bool {
+	if account.LastSuccessAt.IsZero() {
+		return false
+	}
+	longWindow := account.Quota.LongWindow
+	if longWindow != nil && !windowShowsRemainingCapacity(longWindow, now) {
+		return false
+	}
+	if fiveHour := account.Quota.FiveHour; fiveHour != nil {
+		if !windowShowsRemainingCapacity(fiveHour, now) {
+			return false
+		}
+		return !fiveHour.ResetAt.Equal(account.TemporaryResetAt)
+	}
+	return longWindow != nil && !longWindow.ResetAt.IsZero() && longWindow.ResetAt.After(account.TemporaryResetAt)
 }
 
 func (s *PluginState) RecordLog(level, event, message string, fields map[string]any, now time.Time) {

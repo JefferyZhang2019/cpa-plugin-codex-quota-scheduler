@@ -10,7 +10,7 @@ import (
 	"time"
 )
 
-const CurrentStateSchema = 1
+const CurrentStateSchema = 2
 
 var ErrStateReadOnly = errors.New("state store is read-only")
 
@@ -27,6 +27,7 @@ type PersistentState struct {
 	ProbeAttemptSeq     uint64                                             `json:"probe_attempt_seq,omitempty"`
 	ProbeWindows        map[AuthInstanceID]map[ProbeWindowKind]ProbeWindow `json:"probe_windows,omitempty"`
 	LastConfirmedRoster *PersistedConfirmedRoster                          `json:"last_confirmed_roster,omitempty"`
+	ManagedLifecycle    map[string]ManagedDisableRecord                    `json:"managed_lifecycle,omitempty"`
 }
 
 type PersistedRosterEntry struct {
@@ -43,7 +44,7 @@ type PersistedConfirmedRoster struct {
 }
 
 func NewPersistentState() PersistentState {
-	return PersistentState{SchemaVersion: CurrentStateSchema, AdmissionEpochs: map[AuthInstanceID]InstanceAdmissionEpoch{}, CredentialChains: map[AuthInstanceID]TransitionChain{}, Bindings: map[string]RuntimeBinding{}, ProbeAttempts: map[AuthInstanceID]ProbeAttemptSeam{}, ProbeWindows: map[AuthInstanceID]map[ProbeWindowKind]ProbeWindow{}}
+	return PersistentState{SchemaVersion: CurrentStateSchema, AdmissionEpochs: map[AuthInstanceID]InstanceAdmissionEpoch{}, CredentialChains: map[AuthInstanceID]TransitionChain{}, Bindings: map[string]RuntimeBinding{}, ProbeAttempts: map[AuthInstanceID]ProbeAttemptSeam{}, ProbeWindows: map[AuthInstanceID]map[ProbeWindowKind]ProbeWindow{}, ManagedLifecycle: map[string]ManagedDisableRecord{}}
 }
 func clonePersistentState(s PersistentState) PersistentState {
 	raw, _ := json.Marshal(s)
@@ -52,6 +53,9 @@ func clonePersistentState(s PersistentState) PersistentState {
 	out.FenceUnsafe = s.FenceUnsafe
 	if out.AdmissionEpochs == nil {
 		out.AdmissionEpochs = map[AuthInstanceID]InstanceAdmissionEpoch{}
+	}
+	if out.ManagedLifecycle == nil {
+		out.ManagedLifecycle = map[string]ManagedDisableRecord{}
 	}
 	if out.CredentialChains == nil {
 		out.CredentialChains = map[AuthInstanceID]TransitionChain{}
