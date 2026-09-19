@@ -280,9 +280,11 @@ The page provides:
 The CPA plugin menu API accepts only one static label, so the registered
 sidebar name is **Codex Scheduler** in every management UI language.
 
-Protected data and actions require the CPA Management key. The key remains only
-in the current browser page session and is not saved to plugin state,
-`localStorage`, `sessionStorage`, exports, or logs.
+When embedded in CPA Management Center, the plugin initially follows CPA's
+current language: Chinese locales use Chinese, while every other locale defaults
+to English. A language explicitly selected inside the plugin is remembered and
+takes precedence on later visits.
+
 Protected data and actions require the CPA Management key. By default, the key
 remains only in the current browser page session. The optional **Remember
 management key in this browser** setting saves it unencrypted in browser local
