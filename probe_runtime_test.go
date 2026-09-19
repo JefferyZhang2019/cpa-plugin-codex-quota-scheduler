@@ -30,6 +30,8 @@ type sequenceProbeHost struct {
 	urls          []string
 	requests      []pluginapi.HTTPRequest
 	quotaStatus   int
+	probeStatus   int
+	probeBody     []byte
 	getErr        error
 	doErrors      map[string][]error
 	gets          int
@@ -273,7 +275,15 @@ func (h *sequenceProbeHost) Do(req pluginapi.HTTPRequest) (pluginapi.HTTPRespons
 	}
 	var response pluginapi.HTTPResponse
 	if req.URL == codexResetProbeEndpoint {
-		response = pluginapi.HTTPResponse{StatusCode: http.StatusOK, Body: []byte(`{"usage":{"total_tokens":1}}`)}
+		status := h.probeStatus
+		if status == 0 {
+			status = http.StatusOK
+		}
+		body := h.probeBody
+		if len(body) == 0 {
+			body = []byte(`{"usage":{"total_tokens":1}}`)
+		}
+		response = pluginapi.HTTPResponse{StatusCode: status, Body: body}
 	} else if req.URL == resetCreditsEndpoint {
 		response = pluginapi.HTTPResponse{StatusCode: http.StatusOK, Body: []byte(`{}`)}
 	} else {
@@ -1552,6 +1562,100 @@ func TestProbeFailureLogRedactsSecrets(t *testing.T) {
 		if strings.Contains(errText, forbidden) {
 			t.Fatalf("probe failure log leaked %q: %#v", forbidden, failures[0])
 		}
+	}
+}
+
+func TestProbeActivationHTTPFailureLogsStageAndSanitizedResponse(t *testing.T) {
+	now := time.Date(2026, 7, 18, 22, 59, 55, 0, time.UTC)
+	r, host, _ := newFirstObservedWeeklyLazyRuntime(t, now)
+	host.mu.Lock()
+	host.probeStatus = http.StatusNotFound
+	host.probeBody = []byte(`{"detail":"model not found","access_token":"access-token-sentinel"}`)
+	host.mu.Unlock()
+
+	if err := r.RunProbeDueOnce(context.Background()); err == nil {
+		t.Fatal("RunProbeDueOnce returned nil error")
+	}
+	logs := r.state.Snapshot(now).Logs
+	var failure *LogEntry
+	for i := range logs {
+		if logs[i].Event == "probe.failed" {
+			failure = &logs[i]
+			break
+		}
+	}
+	if failure == nil {
+		t.Fatalf("logs = %#v, want probe.failed", logs)
+	}
+	if got := failure.Fields["error"]; got != "activation_http_status" {
+		t.Fatalf("error = %#v, want activation_http_status", got)
+	}
+	if got := failure.Fields["stage"]; got != "activation_post" {
+		t.Fatalf("stage = %#v, want activation_post", got)
+	}
+	if got := failure.Fields["http_status"]; got != http.StatusNotFound {
+		t.Fatalf("http_status = %#v, want 404", got)
+	}
+	if got := failure.Fields["sent"]; got != true {
+		t.Fatalf("sent = %#v, want true", got)
+	}
+	summary, _ := failure.Fields["response_summary"].(string)
+	if !strings.Contains(summary, "model not found") || strings.Contains(summary, "access-token-sentinel") {
+		t.Fatalf("response_summary = %q, want useful redacted detail", summary)
+	}
+	for _, entry := range logs {
+		if entry.Event == "probe.activation_sent" {
+			t.Fatalf("activation_sent logged after rejected POST: %#v", logs)
+		}
+	}
+}
+
+func TestProbeActivationRequestUsesMinimalResponsesChanges(t *testing.T) {
+	now := time.Date(2026, 7, 18, 22, 59, 55, 0, time.UTC)
+	r, host, _ := newFirstObservedWeeklyLazyRuntime(t, now)
+
+	if err := r.RunProbeDueOnce(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	host.mu.Lock()
+	defer host.mu.Unlock()
+	var activation *pluginapi.HTTPRequest
+	for i := range host.requests {
+		if host.requests[i].Method == http.MethodPost && host.requests[i].URL == codexResetProbeEndpoint {
+			request := host.requests[i]
+			activation = &request
+			break
+		}
+	}
+	if activation == nil {
+		t.Fatalf("requests = %#v, want activation POST", host.requests)
+	}
+	want := map[string]string{
+		"Authorization":      "Bearer access",
+		"Chatgpt-Account-Id": "acct",
+		"Content-Type":       "application/json",
+	}
+	if len(activation.Headers) != len(want) {
+		t.Errorf("activation headers = %#v, want only original three headers", activation.Headers)
+	}
+	for name, value := range want {
+		if got := activation.Headers.Get(name); got != value {
+			t.Errorf("%s = %q, want %q", name, got, value)
+		}
+	}
+	var body struct {
+		Model  string `json:"model"`
+		Stream bool   `json:"stream"`
+		Store  bool   `json:"store"`
+	}
+	if err := json.Unmarshal(activation.Body, &body); err != nil {
+		t.Fatalf("activation body: %v", err)
+	}
+	if body.Model != codexResetProbeModel || !body.Stream || body.Store {
+		t.Fatalf("activation body = %#v, want model=%q stream=true store=false", body, codexResetProbeModel)
+	}
+	if string(activation.Body) != resetProbePayload {
+		t.Fatalf("activation body = %s, want original payload plus stream/store only", activation.Body)
 	}
 }
 

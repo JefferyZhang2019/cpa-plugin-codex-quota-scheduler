@@ -8,9 +8,9 @@ import (
 const (
 	resetProbeAfterResetDelay = 10 * time.Minute
 	resetProbeCloseThreshold  = 3 * time.Minute
-	codexResetProbeEndpoint   = "https://chatgpt.com/backend-api/codex/responses/compact"
+	codexResetProbeEndpoint   = "https://chatgpt.com/backend-api/codex/responses"
 	codexResetProbeModel      = "gpt-5.4-mini"
-	resetProbePayload         = `{"model":"gpt-5.4-mini","instructions":"","input":[{"type":"message","role":"user","content":[{"type":"input_text","text":"ping"}]}]}`
+	resetProbePayload         = `{"model":"gpt-5.4-mini","instructions":"","input":[{"type":"message","role":"user","content":[{"type":"input_text","text":"ping"}]}],"stream":true,"store":false}`
 )
 
 func probeWindowDuration(window QuotaWindow) (time.Duration, bool) {

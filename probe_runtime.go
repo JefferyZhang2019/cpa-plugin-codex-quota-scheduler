@@ -18,6 +18,15 @@ type probeReadResult struct {
 	Quota       ParsedQuota
 	Credentials CodexCredentials
 }
+type probeActivationStatusError struct {
+	status int
+	body   []byte
+}
+
+func (e probeActivationStatusError) Error() string {
+	return fmt.Sprintf("probe activation request returned status %d: response body: %s", e.status, sanitizedBodySummary(e.body))
+}
+
 type probeSequencePayload struct {
 	Binding  RuntimeBinding
 	Windows  []ProbeWindowKind
@@ -974,6 +983,7 @@ func (r *QuotaRefresher) runTypedHeld(ctx context.Context, intent Intent, held *
 	case OperationProbeSequence:
 		p := intent.Payload.(probeSequencePayload)
 		attempt := p.Attempt
+		stage := "probe_start"
 		fields := func(windows []ProbeWindowKind) map[string]any {
 			return map[string]any{"auth_id": intent.AuthID, "attempt_id": attempt.AttemptID, "windows": append([]ProbeWindowKind(nil), windows...)}
 		}
@@ -1004,12 +1014,20 @@ func (r *QuotaRefresher) runTypedHeld(ctx context.Context, intent Intent, held *
 			failureFields := fields(windows)
 			failureFields["error"] = "probe_operation_failed"
 			failureFields["error_category"] = "external_callback"
+			failureFields["stage"] = stage
+			var activationStatus probeActivationStatusError
 			var status quotaStatusError
 			switch {
+			case errors.As(err, &activationStatus):
+				failureFields["error"] = "activation_http_status"
+				failureFields["error_category"] = "upstream_http"
+				failureFields["http_status"] = activationStatus.status
+				failureFields["response_summary"] = sanitizedProbeResponseSummary(activationStatus.body)
 			case errors.As(err, &status):
 				failureFields["error"] = "quota_http_status"
 				failureFields["error_category"] = "upstream_http"
 				failureFields["http_status"] = status.status
+				failureFields["response_summary"] = sanitizedProbeResponseSummary(status.body)
 			case errors.Is(err, ErrCapabilityB):
 				failureFields["error"] = "background_not_authorized"
 				failureFields["error_category"] = "authorization"
@@ -1062,6 +1080,7 @@ func (r *QuotaRefresher) runTypedHeld(ctx context.Context, intent Intent, held *
 			return OperationResult{Token: intent.Token, Err: err}
 		}
 		if p.Recovery {
+			stage = "recovery_verify_quota"
 			if attempt.SendFenceSeq == 0 {
 				attempt.SendFenceSeq = intent.StartedAfter
 			}
@@ -1079,6 +1098,7 @@ func (r *QuotaRefresher) runTypedHeld(ctx context.Context, intent Intent, held *
 			if err != nil {
 				return fail(err, true)
 			}
+			stage = "persist_recovery_verification"
 			if err = r.persistVerifiedProbeCompletion(intent.Instance, attempt.AttemptID, vr.Quota, ProbeAttemptSending, ProbeAttemptSent, ProbeAttemptSentUnknown); err != nil {
 				recordFailure(err, true, p.Windows)
 				return OperationResult{Token: intent.Token, Err: err}
@@ -1089,6 +1109,7 @@ func (r *QuotaRefresher) runTypedHeld(ctx context.Context, intent Intent, held *
 			return res
 		}
 		recordLog("info", "probe.precheck_started", "开始检查疑似未激活的额度周期", fields(p.Windows))
+		stage = "precheck_quota"
 		_, err := r.probeFence.Next() // actual-start precheck sequence, distinct from completedFence
 		if err != nil {
 			return fail(err, false)
@@ -1126,10 +1147,12 @@ func (r *QuotaRefresher) runTypedHeld(ctx context.Context, intent Intent, held *
 		attempt.CreatedAt = r.now()
 		attempt.VerifyNotBefore = attempt.CreatedAt.Add(3 * time.Second)
 		attempt.SuppressUntil = attempt.CreatedAt.Add(10 * time.Minute)
+		stage = "persist_activation_prepared"
 		if err = r.probeWAL.PersistSending(attempt); err != nil {
 			return fail(err, false)
 		}
 		held.MarkProbeSent(attempt.SuppressUntil)
+		stage = "activation_post"
 		err = held.DoHTTP(ctx, func(context.Context) error {
 			return r.probeWAL.ExecuteSend(func() error {
 				resp, e := r.doBackgroundHTTPRequest(pluginapi.HTTPRequest{Method: http.MethodPost, URL: codexResetProbeEndpoint, Headers: http.Header{"Authorization": []string{"Bearer " + pre.Credentials.AccessToken}, "Chatgpt-Account-Id": []string{pre.Credentials.ChatGPTAccountID}, "Content-Type": []string{"application/json"}}, Body: resetProbePayloadBytes()}, true)
@@ -1137,7 +1160,7 @@ func (r *QuotaRefresher) runTypedHeld(ctx context.Context, intent Intent, held *
 					return e
 				}
 				if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-					return quotaStatusError{status: resp.StatusCode, body: resp.Body}
+					return probeActivationStatusError{status: resp.StatusCode, body: resp.Body}
 				}
 				return nil
 			})
@@ -1145,10 +1168,12 @@ func (r *QuotaRefresher) runTypedHeld(ctx context.Context, intent Intent, held *
 		if err != nil {
 			return fail(err, true)
 		}
+		stage = "persist_activation_sent"
 		if err = r.probeWAL.PersistSent(intent.Instance, attempt.AttemptID, r.now()); err != nil {
 			return fail(err, true)
 		}
 		recordLog("info", "probe.activation_sent", "已发送极小请求以激活额度周期", fields(lazy))
+		stage = "propagation_wait"
 		if err = held.WaitPropagation(ctx, 3*time.Second); err != nil {
 			return fail(err, true)
 		}
@@ -1159,6 +1184,7 @@ func (r *QuotaRefresher) runTypedHeld(ctx context.Context, intent Intent, held *
 		if seq <= fence {
 			return fail(errors.New("verify read did not start after send fence"), true)
 		}
+		stage = "verify_quota"
 		vr, err := read()
 		if err != nil {
 			return fail(err, true)
@@ -1171,6 +1197,7 @@ func (r *QuotaRefresher) runTypedHeld(ctx context.Context, intent Intent, held *
 				r.probeController.SetWindow(intent.Instance, k, w)
 			}
 		}
+		stage = "persist_verification"
 		err = r.persistTerminalProbeCompletionLocked(intent.Instance, attempt.AttemptID, vr.Quota, ProbeAttemptSent)
 		r.probeHoldMu.Unlock()
 		if err != nil {
