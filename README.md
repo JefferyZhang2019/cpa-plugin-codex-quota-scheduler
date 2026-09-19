@@ -7,7 +7,39 @@ provides a quota-aware, optimized Fill First scheduler for Codex accounts, so
 CPA selects accounts by real usability instead of relying on a static account
 order alone.
 
-## v0.2.2 Highlights
+## v0.3.0 Highlights
+
+- Built on the CPA v7.3 plugin SDK (schema 6): raw-JSON management responses,
+  official request lifecycle events, and the QuotaProvider interface exposing
+  cached Codex quota to CPA management clients.
+- Quota is now observed from real response streams: a strictly read-only
+  stream-chunk interceptor parses `codex.rate_limits` frames, and successful
+  usage records consume the host-normalized `X-Codex-*` snapshot. Observations
+  refresh the cache, defer polling, and carry window-identity evidence into
+  the temporary-exhaustion reconciliation. The UI shows each account's quota
+  source.
+- Temporary-exhaustion markers now clear automatically when a fresh quota read
+  proves an actual upstream reset (window identity changed and every known
+  window has capacity), in addition to real-request success and the
+  operator-confirmed manual refresh. Same-window percentages alone still never
+  clear anything.
+- Optional per-model retry chain with failover (Live / Shadow / Always modes)
+  for retryable upstream failures before any content is committed, ported from
+  doer-ee's Codex Fleet Manager (MIT). Disabled by default.
+- Schedule across CPA priority tiers: with `schedule_across_priorities`
+  (default on) a lower tier is selected when every higher tier is exhausted,
+  instead of delegating to the built-in scheduler.
+- Opt-in managed quota disable and recovery lane (429 → CPA-level disable →
+  read-only polling → verified re-enable) with credential-fingerprint
+  ownership, ported from dos1989's fork (MIT) and hardened.
+- Probe hardening from Siriussee's fork: ambiguous sends recover without an
+  unrelated wake, and a mid-probe server-side compensating reset rebases the
+  baseline instead of looping in AnomalyHold. The probe model moves to
+  gpt-5.6-luna.
+- Management UI: account pin toggle, remembered-key reveal on auth failure,
+  per-account quota source, and managed-disable status.
+
+## v0.3.0 Highlights and later
 
 - Existing installations safely migrate their lazy-reset baselines; fresh
   installations observe the first confirmed lazy reset window before activation.
@@ -457,8 +489,8 @@ make build
 Build release archives and checksums:
 
 ```bash
-make package VERSION=0.2.2
-make checksums VERSION=0.2.2
+make package VERSION=0.3.0
+make checksums VERSION=0.3.0
 ```
 
 Windows users can build `dist/codex-quota-scheduler.dll` with:
@@ -474,8 +506,8 @@ workflow. It tests the repository and publishes platform archives plus
 `checksums.txt`:
 
 ```bash
-git tag -a v0.2.2 -m "v0.2.2"
-git push origin v0.2.2
+git tag -a v0.3.0 -m "v0.3.0"
+git push origin v0.3.0
 ```
 
 Release archives use this naming scheme:
@@ -506,6 +538,22 @@ PUT  /v0/management/plugins/codex-quota-scheduler/annotations
 PATCH /v0/management/plugins/codex-quota-scheduler/annotations/account
 PATCH /v0/management/plugins/codex-quota-scheduler/annotations/group
 ```
+
+## Acknowledgments
+
+This release incorporates work from the plugin's fork community, all MIT:
+
+- **doer-ee / Codex Fleet Manager** — the per-model retry chain with failover,
+  its shadow mode and CPA prerequisite checker, the management-key reveal UX,
+  the account pin toggle, and the probe model update.
+- **dos1989** — the managed quota disable-and-recovery concept and its
+  ownership-record design.
+- **Siriussee** — the ambiguous-send recovery scheduling and the external
+  compensating-reset rebase behavior.
+- **jacobhere (PRs #4–#10)** — quota pressure scheduling, the reset-probe
+  endpoint fix, reset countdowns, UI localization, the English sidebar label,
+  remembered management key, and quota bar color bands.
+- **lawyer61 (PR #12)** — the inflight-limiting design tracked in #13.
 
 ## License
 
