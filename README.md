@@ -7,7 +7,7 @@ provides a quota-aware, optimized Fill First scheduler for Codex accounts, so
 CPA selects accounts by real usability instead of relying on a static account
 order alone.
 
-## v0.2.1 Highlights
+## v0.2.2 Highlights
 
 - Existing installations safely migrate their lazy-reset baselines; fresh
   installations observe the first confirmed lazy reset window before activation.
@@ -358,8 +358,8 @@ make build
 Build release archives and checksums:
 
 ```bash
-make package VERSION=0.2.1
-make checksums VERSION=0.2.1
+make package VERSION=0.2.2
+make checksums VERSION=0.2.2
 ```
 
 Windows users can build `dist/codex-quota-scheduler.dll` with:
@@ -375,8 +375,8 @@ workflow. It tests the repository and publishes platform archives plus
 `checksums.txt`:
 
 ```bash
-git tag -a v0.2.1 -m "v0.2.1"
-git push origin v0.2.1
+git tag -a v0.2.2 -m "v0.2.2"
+git push origin v0.2.2
 ```
 
 Release archives use this naming scheme:

@@ -6,7 +6,7 @@
 账号提供额度感知的优化版 Fill First 调度，让 CPA 按账号的真实可用性选择账号，
 而不只是依赖固定的账号顺序。
 
-## v0.2.1 主要更新
+## v0.2.2 主要更新
 
 - 已有安装会安全迁移延迟重置基线；全新安装会先观察首个确认的延迟重置窗口，再执行激活。
 - 即使普通刷新处于休眠状态，选择启用的 Probe 仍会按额度刷新间隔执行只读观察，最短 30 分钟。
@@ -313,8 +313,8 @@ make build
 构建发布压缩包和校验文件：
 
 ```bash
-make package VERSION=0.2.1
-make checksums VERSION=0.2.1
+make package VERSION=0.2.2
+make checksums VERSION=0.2.2
 ```
 
 Windows 用户可以用以下命令构建 `dist/codex-quota-scheduler.dll`：
@@ -329,8 +329,8 @@ Windows 用户可以用以下命令构建 `dist/codex-quota-scheduler.dll`：
 仓库，并发布各平台压缩包和 `checksums.txt`：
 
 ```bash
-git tag -a v0.2.1 -m "v0.2.1"
-git push origin v0.2.1
+git tag -a v0.2.2 -m "v0.2.2"
+git push origin v0.2.2
 ```
 
 发布包使用以下命名方式：
