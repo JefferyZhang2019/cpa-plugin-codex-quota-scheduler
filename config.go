@@ -58,9 +58,11 @@ type registration struct {
 }
 
 type registrationCapabilities struct {
-	Scheduler     bool `json:"scheduler"`
-	UsagePlugin   bool `json:"usage_plugin"`
-	ManagementAPI bool `json:"management_api"`
+	Scheduler              bool `json:"scheduler"`
+	UsagePlugin            bool `json:"usage_plugin"`
+	ManagementAPI          bool `json:"management_api"`
+	RequestLifecyclePlugin bool `json:"request_lifecycle_plugin,omitempty"`
+	QuotaProvider          bool `json:"quota_provider,omitempty"`
 }
 
 type rawConfig struct {
@@ -349,9 +351,11 @@ func PluginRegistration() registration {
 			Logo:             "https://raw.githubusercontent.com/router-for-me/CLIProxyAPI/main/docs/logo.png",
 		},
 		Capabilities: registrationCapabilities{
-			Scheduler:     true,
-			UsagePlugin:   true,
-			ManagementAPI: true,
+			Scheduler:              true,
+			UsagePlugin:            true,
+			ManagementAPI:          true,
+			RequestLifecyclePlugin: true,
+			QuotaProvider:          true,
 		},
 	}
 }

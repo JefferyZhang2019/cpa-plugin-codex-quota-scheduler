@@ -51,6 +51,16 @@ func handleMethod(method string, request []byte) ([]byte, error) {
 		return handleSchedulerPick(request)
 	case pluginabi.MethodUsageHandle:
 		return handleUsageHandle(request)
+	case pluginabi.MethodRequestComplete:
+		return handleRequestComplete(request)
+	case pluginabi.MethodQuotaIdentifier:
+		return okEnvelope(handleQuotaIdentifier())
+	case pluginabi.MethodQuotaDescribe:
+		return okEnvelope(handleQuotaDescribe())
+	case pluginabi.MethodQuotaFetch:
+		return handleQuotaFetchMethod(request, time.Now())
+	case pluginabi.MethodPluginQuiesce:
+		return handlePluginQuiesce()
 	case pluginabi.MethodManagementRegister:
 		return okEnvelope(RegisterManagement())
 	case pluginabi.MethodManagementHandle:
