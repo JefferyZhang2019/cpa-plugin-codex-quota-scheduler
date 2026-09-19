@@ -140,7 +140,7 @@ func accountViewFromState(a AccountState, cfg Config, now time.Time, trials *Tri
 		Cache: cache, LastKnownAvailable: a.LastError == "", Exhausted: exhausted,
 		ResetAt: reset, AuthBlocked: a.Refresh.AuthFailure, Circuit: circuitClass,
 		TemporaryUnavailable: a.TemporaryExhausted && a.TemporaryResetAt.After(now),
-		Trial:                trial, Expiry: accountSortTime(a), RemainingQuota: remainingQuota(a),
+		Trial:                trial, Expiry: accountSortTime(a), RemainingQuota: remainingQuota(a), QuotaPressure: quotaPressure(a, now),
 	}
 }
 
@@ -172,4 +172,31 @@ func remainingQuota(a AccountState) float64 {
 		}
 	}
 	return 0
+}
+
+const minimumQuotaPressureWindow = 30 * time.Minute
+
+// quotaPressure estimates how quickly the remaining long-window quota must be
+// consumed before reset. A 30-minute floor keeps the score bounded close to a
+// reset. Unknown long-window usage has no pressure and falls through to the
+// deterministic expiry/remaining-quota tie breakers.
+func quotaPressure(a AccountState, now time.Time) float64 {
+	window := a.Quota.LongWindow
+	if window == nil || window.UsedPercent == nil || window.ResetAt.IsZero() {
+		return 0
+	}
+	untilReset := window.ResetAt.Sub(now)
+	if untilReset <= 0 {
+		return 0
+	}
+	if untilReset < minimumQuotaPressureWindow {
+		untilReset = minimumQuotaPressureWindow
+	}
+	remaining := 100 - *window.UsedPercent
+	if remaining < 0 {
+		remaining = 0
+	} else if remaining > 100 {
+		remaining = 100
+	}
+	return remaining / untilReset.Hours()
 }
