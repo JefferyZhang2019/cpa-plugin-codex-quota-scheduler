@@ -199,17 +199,26 @@ jobs:
 
       - name: Build FreeBSD shared library
         timeout-minutes: 45
-        uses: go-cross/cgo-actions@v1
         env:
           GOFLAGS: -trimpath -buildmode=c-shared
-        with:
-          dir: .
-          packages: .
-          targets: freebsd-amd64
-          out-dir: dist/freebsd-amd64
-          output: ${{ env.PLUGIN_NAME }}.so
-          flags: -ldflags=-s -w
-          x-flags: main.pluginVersion=${{ steps.release_metadata.outputs.version }}
+        run: |
+          set -euo pipefail
+          # go-cross/cgo-actions hardcodes 14.3-RELEASE, which FreeBSD removed
+          # from its distribution servers. Replicate the action's freebsd
+          # engine (base.txz sysroot + clang cross build) against a release
+          # that is still downloadable. Bump FREEBSD_RELEASE when it is
+          # superseded and dropped from download.freebsd.org.
+          FREEBSD_RELEASE="14.5-RELEASE"
+          FREEBSD_TRIPLE="x86_64-unknown-freebsd14.5"
+          wget -q "https://download.freebsd.org/releases/amd64/${FREEBSD_RELEASE}/base.txz"
+          mkdir -p ./freebsd-sysroot dist/freebsd-amd64
+          sudo tar -xf ./base.txz -C ./freebsd-sysroot
+          rm -f ./base.txz
+          CGO_ENABLED=1 GOOS=freebsd GOARCH=amd64 \
+          CGO_LDFLAGS="-fuse-ld=lld" \
+          CC="clang --target=${FREEBSD_TRIPLE} --sysroot=$(pwd)/freebsd-sysroot" \
+            go build -o "dist/freebsd-amd64/${PLUGIN_NAME}.so" \
+            -ldflags="-s -w -X main.pluginVersion=${VERSION}" .
 
       - name: Package plugin
         run: |
