@@ -53,6 +53,8 @@ func handleMethod(method string, request []byte) ([]byte, error) {
 		return handleUsageHandle(request)
 	case pluginabi.MethodRequestComplete:
 		return handleRequestComplete(request)
+	case pluginabi.MethodResponseInterceptStreamChunk:
+		return handleStreamChunkIntercept(request)
 	case pluginabi.MethodQuotaIdentifier:
 		return okEnvelope(handleQuotaIdentifier())
 	case pluginabi.MethodQuotaDescribe:

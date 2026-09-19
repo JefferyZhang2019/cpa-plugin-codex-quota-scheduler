@@ -313,6 +313,47 @@ func (s *PluginState) ClearAccountTemporaryExhausted(authID string) bool {
 	return true
 }
 
+// ObserveAccountQuota merges quota state observed inside a real response
+// stream into the cached account. An observation is bound to an actual call,
+// so it both refreshes the cache (deferring the polling refresh) and runs the
+// same window-identity reconciliation as a polled refresh. Only the windows
+// present in the observation are overwritten; everything else is preserved.
+func (s *PluginState) ObserveAccountQuota(authID, authIndex string, quota ParsedQuota, now time.Time) (AccountState, bool) {
+	if authID == "" && authIndex == "" {
+		return AccountState{}, false
+	}
+	if now.IsZero() {
+		now = time.Now()
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	key, account, ok := s.findAccountLocked(authID, authIndex)
+	if !ok {
+		return AccountState{}, false
+	}
+	if quota.FiveHour != nil {
+		account.Quota.FiveHour = quota.FiveHour
+	}
+	if quota.LongWindow != nil {
+		account.Quota.LongWindow = quota.LongWindow
+	}
+	if quota.Family != "" {
+		account.Quota.Family = quota.Family
+		account.Family = quota.Family
+	}
+	account.LastRefreshAt = now
+	account.LastSuccessAt = now
+	account.LastObservedAt = now
+	account.Stale = false
+	if account.TemporaryExhausted && quotaRefreshConfirmsReset(account, now) {
+		account.TemporaryExhausted = false
+		account.TemporaryResetAt = time.Time{}
+		account.LastError = ""
+	}
+	s.accounts[key] = account
+	return cloneAccountState(account), true
+}
+
 func (s *PluginState) findAccountLocked(authID, authIndex string) (string, AccountState, bool) {
 	if authID != "" {
 		if account, ok := s.accounts["auth:"+authID]; ok {

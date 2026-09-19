@@ -130,6 +130,23 @@ Given four admitted Codex accounts, the visible and effective order is:
 Quota refresh reads the current Codex quota state from ChatGPT. It does not send
 an ordinary model request and does not need the Management page to remain open.
 
+Quota data has two sources:
+
+- **Response observation (preferred).** Every Codex response stream carries a
+  `codex.rate_limits` event with the same window data as the quota endpoint,
+  and successful usage records may carry the host-normalized `X-Codex-*`
+  snapshot (WebSocket transport). The plugin registers a strictly read-only
+  stream-chunk interceptor that watches for those frames, attributes them to
+  the serving account, and refreshes its quota cache as a side effect of real
+  traffic. An observation also defers that account's polling refresh and feeds
+  the temporary-exhaustion reconciliation with evidence bound to an actual
+  response. The interceptor never modifies, holds, or delays any stream byte.
+- **Polling fallback.** Accounts without recent observations are refreshed from
+  the generic quota endpoint on the usual cadence.
+
+The Management UI shows each account's quota source (response observation vs
+polled refresh).
+
 During recent Codex activity, accounts are refreshed when their individual
 deadlines become due; the worker does not repeatedly scan every account at a
 fixed global interval. After the active window becomes idle, normal background

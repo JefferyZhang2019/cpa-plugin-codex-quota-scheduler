@@ -63,6 +63,7 @@ type registrationCapabilities struct {
 	ManagementAPI          bool `json:"management_api"`
 	RequestLifecyclePlugin bool `json:"request_lifecycle_plugin,omitempty"`
 	QuotaProvider          bool `json:"quota_provider,omitempty"`
+	StreamChunkInterceptor bool `json:"response_stream_interceptor,omitempty"`
 }
 
 type rawConfig struct {
@@ -356,6 +357,7 @@ func PluginRegistration() registration {
 			ManagementAPI:          true,
 			RequestLifecyclePlugin: true,
 			QuotaProvider:          true,
+			StreamChunkInterceptor: true,
 		},
 	}
 }

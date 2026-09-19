@@ -146,14 +146,18 @@ type AccountState struct {
 	Quota                 ParsedQuota
 	LastRefreshAt         time.Time
 	LastSuccessAt         time.Time
-	LastError             string
-	Stale                 bool
-	TemporaryExhausted    bool
-	TemporaryResetAt      time.Time
-	Circuit               CircuitBreakerState
-	Refresh               AccountRefreshState
-	ResetProbes           map[WindowKind]ResetProbeState
-	Annotation            AccountAnnotation
+	// LastObservedAt records when quota state was last observed inside a real
+	// response stream (codex.rate_limits frame or usage-record response
+	// headers). It is in-memory only and resets on restart.
+	LastObservedAt     time.Time
+	LastError          string
+	Stale              bool
+	TemporaryExhausted bool
+	TemporaryResetAt   time.Time
+	Circuit            CircuitBreakerState
+	Refresh            AccountRefreshState
+	ResetProbes        map[WindowKind]ResetProbeState
+	Annotation         AccountAnnotation
 }
 
 type CPAAdmissionState struct {
