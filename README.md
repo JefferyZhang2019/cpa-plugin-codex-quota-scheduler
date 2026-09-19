@@ -141,6 +141,24 @@ temporarily exhausted until its reported reset time, or for two minutes when no
 reset time is provided. Quota exhaustion does not count as a circuit-breaker
 failure. Repeated non-quota failures use the circuit breaker instead.
 
+### Temporary-exhaustion recovery
+
+The temporary-exhaustion marker is cleared only by verified evidence, never by
+generic quota percentages alone:
+
+- **A real successful request through the account** clears the marker
+  immediately. A later `usage_limit_reached` response re-marks the account with
+  a fresh reset time.
+- **A manual per-account refresh from the Management UI** clears the marker when
+  the fresh quota snapshot shows remaining capacity in every known window. The
+  manual action also overrides host-side `disabled`/`unavailable` cooldown
+  flags, so an account can be refreshed after an operator-triggered upstream
+  reset even while CPA still keeps its own cooldown.
+- **Background refresh never clears the marker from percentages alone.** The
+  generic quota endpoint can report 100% remaining while model requests still
+  hit upstream 429 (observed on K12-plan credentials), so automatic recovery
+  requires the real-request evidence above.
+
 ### Reset-window activation
 
 OpenAI may report that a quota reset time has passed without creating the next

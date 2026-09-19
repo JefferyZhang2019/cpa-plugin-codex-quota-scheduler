@@ -2051,3 +2051,128 @@ func waitUntil(timeout time.Duration, condition func() bool) bool {
 	}
 	return condition()
 }
+
+func TestRefreshOneOverridesHostUnavailableAndRecoversTemporaryExhausted(t *testing.T) {
+	now := time.Date(2026, 9, 19, 9, 0, 0, 0, time.UTC)
+	token := makeUnsignedJWT(t, map[string]any{"chatgpt_account_id": "acct-team"})
+	host := &fakeHostClient{
+		authList: []pluginapi.HostAuthFileEntry{
+			{ID: "team", AuthIndex: "idx-team", Provider: "codex", Unavailable: true},
+		},
+		authJSON: map[string]json.RawMessage{
+			"idx-team": json.RawMessage(`{"access_token":"access-team","id_token":"` + token + `"}`),
+		},
+		httpBody: []byte(`{"rate_limit":{"primary_window":{"used_percent":0,"limit_window_seconds":18000,"reset_after_seconds":18000},"secondary_window":{"used_percent":5,"limit_window_seconds":604800,"reset_after_seconds":86400}}}`),
+	}
+	store := NewPluginState(DefaultConfig())
+	store.RecordCodexActivity(now)
+	store.UpsertQuota(AccountState{
+		AuthID:    "team",
+		AuthIndex: "idx-team",
+		Provider:  "codex",
+		Quota: ParsedQuota{
+			Family: AccountFamilyWeekly,
+			FiveHour: &QuotaWindow{Kind: WindowFiveHour, UsedPercent: float64Ptr(100), Exhausted: true,
+				ResetAt: now.Add(3 * time.Hour)},
+			LongWindow: &QuotaWindow{Kind: WindowWeekly, UsedPercent: float64Ptr(100), Exhausted: true,
+				ResetAt: now.Add(72 * time.Hour)},
+		},
+		LastSuccessAt: now.Add(-2 * time.Hour),
+	})
+	store.MarkAccountTemporaryExhausted("team", now.Add(3*time.Hour), usageLimitReachedReason)
+
+	refresher := newAdmittedQuotaRefresherForTest(host, store, func() time.Time { return now })
+	if err := refresher.RefreshOneAuthID("team"); err != nil {
+		t.Fatalf("RefreshOneAuthID returned error: %v", err)
+	}
+	if host.httpCallCount() == 0 {
+		t.Fatal("manual refresh made no upstream calls, want quota fetch despite Unavailable flag")
+	}
+	account := accountByAuthID(t, store.Snapshot(now), "team")
+	if account.TemporaryExhausted {
+		t.Fatalf("TemporaryExhausted still set after verified manual refresh: %#v", account)
+	}
+	if !account.TemporaryResetAt.IsZero() {
+		t.Fatalf("TemporaryResetAt = %s, want zero", account.TemporaryResetAt)
+	}
+	logs := store.Snapshot(now).Logs
+	var override, recovered bool
+	for _, entry := range logs {
+		if entry.Event == "quota.manual_refresh_override" {
+			override = true
+		}
+		if entry.Event == "quota.temporary_recovered" {
+			recovered = true
+		}
+	}
+	if !override {
+		t.Fatal("missing quota.manual_refresh_override log entry")
+	}
+	if !recovered {
+		t.Fatal("missing quota.temporary_recovered log entry")
+	}
+}
+
+func TestRefreshOneKeepsTemporaryExhaustedWhenFreshQuotaStillLimited(t *testing.T) {
+	now := time.Date(2026, 9, 19, 9, 0, 0, 0, time.UTC)
+	token := makeUnsignedJWT(t, map[string]any{"chatgpt_account_id": "acct-k12"})
+	// K12 negative control from issue #11: the generic quota endpoint reports a
+	// full window while the account is still limited upstream.
+	host := &fakeHostClient{
+		authList: []pluginapi.HostAuthFileEntry{
+			{ID: "k12", AuthIndex: "idx-k12", Provider: "codex"},
+		},
+		authJSON: map[string]json.RawMessage{
+			"idx-k12": json.RawMessage(`{"access_token":"access-k12","id_token":"` + token + `"}`),
+		},
+		httpBody: []byte(`{"rate_limit":{"primary_window":{"used_percent":0,"limit_reached":true,"limit_window_seconds":18000,"reset_after_seconds":18000},"secondary_window":{"used_percent":5,"limit_window_seconds":604800,"reset_after_seconds":86400}}}`),
+	}
+	store := NewPluginState(DefaultConfig())
+	store.RecordCodexActivity(now)
+	store.UpsertQuota(AccountState{
+		AuthID:    "k12",
+		AuthIndex: "idx-k12",
+		Provider:  "codex",
+		Quota: ParsedQuota{
+			Family: AccountFamilyWeekly,
+			FiveHour: &QuotaWindow{Kind: WindowFiveHour, UsedPercent: float64Ptr(100), Exhausted: true,
+				ResetAt: now.Add(3 * time.Hour)},
+			LongWindow: &QuotaWindow{Kind: WindowWeekly, UsedPercent: float64Ptr(50),
+				ResetAt: now.Add(48 * time.Hour)},
+		},
+		LastSuccessAt: now.Add(-2 * time.Hour),
+	})
+	store.MarkAccountTemporaryExhausted("k12", now.Add(3*time.Hour), usageLimitReachedReason)
+
+	refresher := newAdmittedQuotaRefresherForTest(host, store, func() time.Time { return now })
+	if err := refresher.RefreshOneAuthID("k12"); err != nil {
+		t.Fatalf("RefreshOneAuthID returned error: %v", err)
+	}
+	account := accountByAuthID(t, store.Snapshot(now), "k12")
+	if !account.TemporaryExhausted {
+		t.Fatal("TemporaryExhausted cleared although the fresh window still reports limit_reached")
+	}
+	for _, entry := range store.Snapshot(now).Logs {
+		if entry.Event == "quota.temporary_recovered" {
+			t.Fatal("unexpected quota.temporary_recovered log entry")
+		}
+	}
+}
+
+func TestRefreshOneStillRejectsStructurallyIneligibleAuth(t *testing.T) {
+	now := time.Date(2026, 9, 19, 9, 0, 0, 0, time.UTC)
+	host := &fakeHostClient{
+		authList: []pluginapi.HostAuthFileEntry{
+			{ID: "other", AuthIndex: "idx-other", Provider: "gemini"},
+		},
+	}
+	store := NewPluginState(DefaultConfig())
+	store.ReplaceCPAAdmission(CPAAdmissionState{Observed: true, Priority: 0, AuthIDs: map[string]struct{}{"other": {}}})
+	refresher := NewQuotaRefresher(host, store, func() time.Time { return now })
+	err := refresher.RefreshOneAuthID("other")
+	if err == nil || !strings.Contains(err.Error(), "not eligible for quota refresh") {
+		t.Fatalf("err = %v, want not-eligible rejection for non-codex auth", err)
+	}
+}
+
+func float64Ptr(v float64) *float64 { return &v }

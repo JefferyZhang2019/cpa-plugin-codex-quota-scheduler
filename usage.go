@@ -68,17 +68,22 @@ func HandleUsageFeedback(state *PluginState, record pluginapi.UsageRecord, now t
 		return
 	}
 	if record.Provider == "codex" && !record.Failed {
-		if !shouldRecordCircuitSuccess(state, record, now) {
+		recordSuccess, temporaryActive := shouldRecordCircuitSuccess(state, record, now)
+		if !recordSuccess {
 			return
 		}
 		if account, ok := state.RecordAccountSuccess(record.AuthID, record.AuthIndex, now); ok {
-			state.RecordLog("info", "circuit.success", "账号请求成功，熔断状态已更新", map[string]any{
+			fields := map[string]any{
 				"auth_id":       account.AuthID,
 				"auth_index":    account.AuthIndex,
 				"circuit_state": account.Circuit.EffectiveState,
 				"success_count": account.Circuit.SuccessCount,
 				"failure_count": account.Circuit.FailureCount,
-			}, now)
+			}
+			if temporaryActive {
+				fields["temporary_exhausted_cleared"] = true
+			}
+			state.RecordLog("info", "circuit.success", "账号请求成功，熔断状态已更新", fields, now)
 		}
 		return
 	}
@@ -99,7 +104,7 @@ func HandleUsageFeedback(state *PluginState, record pluginapi.UsageRecord, now t
 	}, now)
 }
 
-func shouldRecordCircuitSuccess(state *PluginState, record pluginapi.UsageRecord, now time.Time) bool {
+func shouldRecordCircuitSuccess(state *PluginState, record pluginapi.UsageRecord, now time.Time) (recordSuccess, temporaryActive bool) {
 	for _, account := range state.Snapshot(now).Accounts {
 		if record.AuthID != "" && account.AuthID != record.AuthID {
 			continue
@@ -108,9 +113,10 @@ func shouldRecordCircuitSuccess(state *PluginState, record pluginapi.UsageRecord
 			continue
 		}
 		circuit := effectiveCircuitState(account.Circuit, now)
-		return circuit.EffectiveState != CircuitStateClosed || circuit.FailureCount > 0 || circuit.SuccessCount > 0
+		recordSuccess = circuit.EffectiveState != CircuitStateClosed || circuit.FailureCount > 0 || circuit.SuccessCount > 0 || account.TemporaryExhausted
+		return recordSuccess, account.TemporaryExhausted
 	}
-	return false
+	return false, false
 }
 
 func isUsageLimitReached(body quotaFailureBody) bool {

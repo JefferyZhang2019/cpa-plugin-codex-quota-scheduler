@@ -281,9 +281,36 @@ func (s *PluginState) RecordAccountSuccess(authID, authIndex string, now time.Ti
 	if !ok {
 		return AccountState{}, false
 	}
+	// A real successful request is the strongest recovery evidence: upstream
+	// quota percentages alone can misreport recovery (issue #11 negative
+	// control), so the temporary-exhaustion marker is only reconciled here and
+	// on operator-confirmed manual refreshes, never from a bare quota read.
+	account.TemporaryExhausted = false
+	account.TemporaryResetAt = time.Time{}
 	applyCircuitSuccess(&account, NormalizeConfig(s.cfg), now)
 	s.accounts[key] = account
 	return cloneAccountState(account), true
+}
+
+// ClearAccountTemporaryExhausted drops a stale temporary-exhaustion marker for
+// one account. Callers must hold verified recovery evidence: either a
+// successful real request (RecordAccountSuccess) or an operator-requested
+// refresh whose fresh quota snapshot shows remaining capacity in every known
+// window (QuotaRefresher.reconcileTemporaryExhausted).
+func (s *PluginState) ClearAccountTemporaryExhausted(authID string) bool {
+	if authID == "" {
+		return false
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	key, account, ok := s.findAccountLocked(authID, "")
+	if !ok || !account.TemporaryExhausted {
+		return false
+	}
+	account.TemporaryExhausted = false
+	account.TemporaryResetAt = time.Time{}
+	s.accounts[key] = account
+	return true
 }
 
 func (s *PluginState) findAccountLocked(authID, authIndex string) (string, AccountState, bool) {

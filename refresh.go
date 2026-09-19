@@ -1150,15 +1150,91 @@ func (r *QuotaRefresher) refreshOneAuthIDVersioned(authID string, version uint64
 			continue
 		}
 		if !isRefreshEligible(auth) {
-			return fmt.Errorf("auth %s is not eligible for quota refresh", authID)
+			// An explicit operator action may override host-side Disabled or
+			// Unavailable cooldown flags (for example after a manual upstream
+			// quota reset) but never the structural requirements.
+			if !isManualRefreshCandidate(auth) {
+				return fmt.Errorf("auth %s is not eligible for quota refresh", authID)
+			}
+			r.recordAdmissionLog(authID, version, "warn", "quota.manual_refresh_override", "手动刷新已越过宿主侧的禁用或不可用标记", map[string]any{"auth_id": authID})
 		}
 		r.refreshAuthVersionedSource(auth, version, SourceManualRefresh)
+		r.reconcileTemporaryExhausted(authID, version)
 		return nil
 	}
 	if !r.state.BeginCPAAdmissionCall(authID, version) {
 		return errCPAAdmissionChanged
 	}
 	return fmt.Errorf("auth %s not found", authID)
+}
+
+// isManualRefreshCandidate keeps the structural requirements for an explicit
+// operator-requested refresh while tolerating host-side Disabled or Unavailable
+// cooldown flags that a manual upstream reset may have left behind.
+func isManualRefreshCandidate(auth pluginapi.HostAuthFileEntry) bool {
+	return strings.EqualFold(auth.Provider, "codex") && auth.AuthIndex != ""
+}
+
+// reconcileTemporaryExhausted clears a stale temporary-exhaustion marker after
+// an operator-requested refresh produced a fresh quota snapshot whose known
+// windows all show remaining capacity. Generic quota percentages alone never
+// clear the marker during background refresh (issue #11's K12 negative control
+// observed accounts reporting 100% while model requests still hit upstream
+// 429); reconciliation runs only on the manual per-account path, where the
+// operator has confirmed an upstream reset, and on real request success.
+func (r *QuotaRefresher) reconcileTemporaryExhausted(authID string, version uint64) {
+	authID = strings.TrimSpace(authID)
+	if authID == "" {
+		return
+	}
+	now := r.now()
+	for _, account := range r.state.Snapshot(now).Accounts {
+		if account.AuthID != authID || !account.TemporaryExhausted {
+			continue
+		}
+		if !quotaSnapshotShowsRecovery(account.Quota, now) {
+			continue
+		}
+		if !r.state.BeginCPAAdmissionCall(authID, version) {
+			return
+		}
+		if r.state.ClearAccountTemporaryExhausted(authID) {
+			r.recordAdmissionLog(authID, version, "info", "quota.temporary_recovered", "手动刷新证实额度已恢复，已清除临时耗尽标记", map[string]any{"auth_id": authID})
+			publishSchedulerState(r.state, highestTierSet(r.runtimeRoster()), r.now())
+		}
+		return
+	}
+}
+
+// quotaSnapshotShowsRecovery reports whether a fresh quota read proves usable
+// capacity. Every known window must be non-exhausted with remaining capacity;
+// at least one window must be known. Missing windows are treated as absent
+// evidence rather than recovery.
+func quotaSnapshotShowsRecovery(quota ParsedQuota, now time.Time) bool {
+	known := false
+	for _, window := range []*QuotaWindow{quota.FiveHour, quota.LongWindow} {
+		if window == nil {
+			continue
+		}
+		known = true
+		if !windowShowsRemainingCapacity(window, now) {
+			return false
+		}
+	}
+	return known
+}
+
+func windowShowsRemainingCapacity(window *QuotaWindow, now time.Time) bool {
+	if window == nil {
+		return false
+	}
+	if window.Exhausted && (window.ResetAt.IsZero() || window.ResetAt.After(now)) {
+		return false
+	}
+	if window.UsedPercent != nil {
+		return 100-*window.UsedPercent > 0
+	}
+	return true
 }
 
 func (r *QuotaRefresher) RefreshOneSoon(authID string) {

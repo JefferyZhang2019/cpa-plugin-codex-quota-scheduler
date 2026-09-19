@@ -314,7 +314,7 @@ func TestUsageQuotaFailureMarksTemporaryExhaustedWithoutOpeningCircuit(t *testin
 	}
 }
 
-func TestUsageSuccessDoesNotClearTemporaryExhaustedWhenNoCircuitProbeExists(t *testing.T) {
+func TestUsageSuccessClearsTemporaryExhaustedWithoutCircuitProbe(t *testing.T) {
 	cfg := DefaultConfig()
 	cfg.CircuitFailureThreshold = 1
 	cfg.CircuitOpenDuration = 5 * time.Minute
@@ -340,11 +340,17 @@ func TestUsageSuccessDoesNotClearTemporaryExhaustedWhenNoCircuitProbeExists(t *t
 		t.Fatalf("account after quota failure = %#v", snapshot.Accounts[0])
 	}
 
+	// A real successful request is ground-truth recovery evidence (issue #11):
+	// it clears the temporary-exhaustion marker even though the circuit itself
+	// never opened. A later 429 would re-mark the account immediately.
 	success := pluginapi.UsageRecord{Provider: "codex", AuthID: "auth-1", Failed: false}
 	HandleUsageFeedback(store, success, now.Add(6*time.Minute))
 	snapshot = store.Snapshot(now.Add(6 * time.Minute))
-	if !snapshot.Accounts[0].TemporaryExhausted || snapshot.Accounts[0].Circuit.EffectiveState != CircuitStateClosed || snapshot.Accounts[0].Circuit.SuccessCount != 0 {
+	if snapshot.Accounts[0].TemporaryExhausted {
 		t.Fatalf("account after success = %#v", snapshot.Accounts[0])
+	}
+	if snapshot.Accounts[0].Circuit.EffectiveState != CircuitStateClosed || snapshot.Accounts[0].Circuit.SuccessCount != 0 {
+		t.Fatalf("circuit after success = %#v, want closed without success counting", snapshot.Accounts[0].Circuit)
 	}
 }
 
@@ -397,5 +403,29 @@ func TestUsageLimitWithoutResetSchedulesShortPause(t *testing.T) {
 	}
 	if account.Circuit.State != CircuitStateClosed || account.Circuit.FailureCount != 0 {
 		t.Fatalf("Circuit = %#v, want closed without quota failure count", account.Circuit)
+	}
+}
+
+func TestUsageFeedbackSuccessClearsTemporaryExhausted(t *testing.T) {
+	now := time.Date(2026, 9, 19, 9, 0, 0, 0, time.UTC)
+	store := NewPluginState(DefaultConfig())
+	store.UpsertQuota(AccountState{AuthID: "team", AuthIndex: "idx-team", Provider: "codex", LastSuccessAt: now})
+	store.MarkAccountTemporaryExhausted("team", now.Add(3*time.Hour), usageLimitReachedReason)
+	// Circuit is pristine, so the old gate skipped success recording entirely.
+	HandleUsageFeedback(store, pluginapi.UsageRecord{Provider: "codex", AuthID: "team", AuthIndex: "idx-team"}, now)
+	if account := accountByAuthID(t, store.Snapshot(now), "team"); account.TemporaryExhausted {
+		t.Fatalf("TemporaryExhausted survived a successful request: %#v", account)
+	}
+	var clearedSeen bool
+	for _, entry := range store.Snapshot(now).Logs {
+		if entry.Event != "circuit.success" {
+			continue
+		}
+		if value, ok := entry.Fields["temporary_exhausted_cleared"]; ok && value == true {
+			clearedSeen = true
+		}
+	}
+	if !clearedSeen {
+		t.Fatal("circuit.success log missing temporary_exhausted_cleared field")
 	}
 }

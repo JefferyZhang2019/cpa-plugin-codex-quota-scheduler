@@ -845,3 +845,20 @@ func TestResetProbeUsageEvidence(t *testing.T) {
 		t.Fatal("empty usage was accepted")
 	}
 }
+
+func TestRecordAccountSuccessClearsTemporaryExhausted(t *testing.T) {
+	now := time.Date(2026, 9, 19, 9, 0, 0, 0, time.UTC)
+	store := NewPluginState(DefaultConfig())
+	store.UpsertQuota(AccountState{AuthID: "team", AuthIndex: "idx-team", Provider: "codex", LastSuccessAt: now})
+	store.MarkAccountTemporaryExhausted("team", now.Add(3*time.Hour), usageLimitReachedReason)
+	if account := accountByAuthID(t, store.Snapshot(now), "team"); !account.TemporaryExhausted {
+		t.Fatal("precondition: TemporaryExhausted should be set")
+	}
+	account, ok := store.RecordAccountSuccess("team", "idx-team", now)
+	if !ok {
+		t.Fatal("RecordAccountSuccess reported no account")
+	}
+	if account.TemporaryExhausted || !account.TemporaryResetAt.IsZero() {
+		t.Fatalf("temporary exhaustion survived a real request success: %#v", account)
+	}
+}
