@@ -6,6 +6,13 @@
 账号提供额度感知的优化版 Fill First 调度，让 CPA 按账号的真实可用性选择账号，
 而不只是依赖固定的账号顺序。
 
+## v0.3.1 主要更新
+
+- 修复 v0.3.0 引入的管理页崩溃：设置表单引用了模板中不存在的托管停用历史
+  输入框，导致加载数据时抛出 "Cannot set properties of null" 并隐藏整个受保护
+  区域。重试链的 CPA 确认块现在完整渲染，重试面板在数据加载前保持隐藏，并
+  新增模板测试——任何脚本引用的元素缺失都会让构建失败。
+
 ## v0.3.0 主要更新
 
 - 基于 CPA v7.3 插件 SDK（schema 6）：管理响应保留原始 JSON、官方请求生命周期
@@ -28,7 +35,7 @@
   gpt-5.6-luna。
 - 管理界面：账号置顶、认证失败时显示密钥输入框、单账号额度来源、托管停用状态。
 
-## v0.3.0 主要更新
+## v0.2.2 主要更新
 
 - 已有安装会安全迁移延迟重置基线；全新安装会先观察首个确认的延迟重置窗口，再执行激活。
 - 即使普通刷新处于休眠状态，选择启用的 Probe 仍会按额度刷新间隔执行只读观察，最短 30 分钟。
@@ -420,8 +427,8 @@ make build
 构建发布压缩包和校验文件：
 
 ```bash
-make package VERSION=0.3.0
-make checksums VERSION=0.3.0
+make package VERSION=0.3.1
+make checksums VERSION=0.3.1
 ```
 
 Windows 用户可以用以下命令构建 `dist/codex-quota-scheduler.dll`：
@@ -436,8 +443,8 @@ Windows 用户可以用以下命令构建 `dist/codex-quota-scheduler.dll`：
 仓库，并发布各平台压缩包和 `checksums.txt`：
 
 ```bash
-git tag -a v0.3.0 -m "v0.3.0"
-git push origin v0.3.0
+git tag -a v0.3.1 -m "v0.3.1"
+git push origin v0.3.1
 ```
 
 发布包使用以下命名方式：

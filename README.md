@@ -7,6 +7,15 @@ provides a quota-aware, optimized Fill First scheduler for Codex accounts, so
 CPA selects accounts by real usability instead of relying on a static account
 order alone.
 
+## v0.3.1 Highlights
+
+- Fixed a management-page crash introduced in v0.3.0: the settings form
+  referenced a lifecycle-history input the template never rendered, so loading
+  data threw "Cannot set properties of null" and hid the protected area. The
+  retry-chain CPA confirmation block is rendered completely, the retry section
+  stays hidden until data loads, and a template test now fails the build when
+  any scripted element reference is missing.
+
 ## v0.3.0 Highlights
 
 - Built on the CPA v7.3 plugin SDK (schema 6): raw-JSON management responses,
@@ -39,7 +48,7 @@ order alone.
 - Management UI: account pin toggle, remembered-key reveal on auth failure,
   per-account quota source, and managed-disable status.
 
-## v0.3.0 Highlights and later
+## v0.2.2 Highlights
 
 - Existing installations safely migrate their lazy-reset baselines; fresh
   installations observe the first confirmed lazy reset window before activation.
@@ -489,8 +498,8 @@ make build
 Build release archives and checksums:
 
 ```bash
-make package VERSION=0.3.0
-make checksums VERSION=0.3.0
+make package VERSION=0.3.1
+make checksums VERSION=0.3.1
 ```
 
 Windows users can build `dist/codex-quota-scheduler.dll` with:
@@ -506,8 +515,8 @@ workflow. It tests the repository and publishes platform archives plus
 `checksums.txt`:
 
 ```bash
-git tag -a v0.3.0 -m "v0.3.0"
-git push origin v0.3.0
+git tag -a v0.3.1 -m "v0.3.1"
+git push origin v0.3.1
 ```
 
 Release archives use this naming scheme:
