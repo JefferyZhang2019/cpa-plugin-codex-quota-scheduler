@@ -6,6 +6,17 @@
 账号提供额度感知的优化版 Fill First 调度，让 CPA 按账号的真实可用性选择账号，
 而不只是依赖固定的账号顺序。
 
+## v0.3.2 主要更新
+
+- 认证失败账号自动恢复。token 刷新收到 401/`invalid_grant` 不再把账号永久停机：
+  凭据对账识别操作员重新登录（同一认证文件下出现新的 refresh token）后，立即
+  清除认证异常停机并触发一次验证刷新；账号也会按新增的
+  `auth_failure_retry_interval`（默认 30 分钟，设置页可调）低频重试兜底。调度
+  仍然只在刷新成功后恢复，恢复始终携带新的额度证据。
+- fallback 日志不再对每个降级请求误报 "no ordered candidates"：
+  `scheduler.fallback` 现在会汇总每个候选账号被排除的原因（例如
+  `auth_failure=2,temporary_exhausted=1`）。
+
 ## v0.3.1 主要更新
 
 - 修复 v0.3.0 引入的管理页崩溃：设置表单引用了模板中不存在的托管停用历史
@@ -439,8 +450,8 @@ make build
 构建发布压缩包和校验文件：
 
 ```bash
-make package VERSION=0.3.1
-make checksums VERSION=0.3.1
+make package VERSION=0.3.2
+make checksums VERSION=0.3.2
 ```
 
 Windows 用户可以用以下命令构建 `dist/codex-quota-scheduler.dll`：
@@ -455,8 +466,8 @@ Windows 用户可以用以下命令构建 `dist/codex-quota-scheduler.dll`：
 仓库，并发布各平台压缩包和 `checksums.txt`：
 
 ```bash
-git tag -a v0.3.1 -m "v0.3.1"
-git push origin v0.3.1
+git tag -a v0.3.2 -m "v0.3.2"
+git push origin v0.3.2
 ```
 
 发布包使用以下命名方式：

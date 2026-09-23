@@ -51,9 +51,9 @@ func TestProbeOnProvisionalRosterIsExplicitRiskOption(t *testing.T) {
 	}
 }
 
-func TestPluginRegistrationUsesV031SourceVersion(t *testing.T) {
-	if got := PluginRegistration().Metadata.Version; got != "0.3.1" {
-		t.Fatalf("plugin registration version = %q, want 0.3.1", got)
+func TestPluginRegistrationUsesV032SourceVersion(t *testing.T) {
+	if got := PluginRegistration().Metadata.Version; got != "0.3.2" {
+		t.Fatalf("plugin registration version = %q, want 0.3.2", got)
 	}
 }
 
@@ -62,10 +62,10 @@ func TestReleaseVersionMetadataConsistent(t *testing.T) {
 		path string
 		want []string
 	}{
-		{"config.go", []string{`var pluginVersion = "0.3.1"`}},
-		{"Makefile", []string{"VERSION ?= 0.3.1"}},
-		{"README.md", []string{"## v0.3.1 Highlights", "make package VERSION=0.3.1", "make checksums VERSION=0.3.1", "git tag -a v0.3.1 -m \"v0.3.1\"", "git push origin v0.3.1"}},
-		{"README.zh-CN.md", []string{"## v0.3.1 主要更新", "make package VERSION=0.3.1", "make checksums VERSION=0.3.1", "git tag -a v0.3.1 -m \"v0.3.1\"", "git push origin v0.3.1"}},
+		{"config.go", []string{`var pluginVersion = "0.3.2"`}},
+		{"Makefile", []string{"VERSION ?= 0.3.2"}},
+		{"README.md", []string{"## v0.3.2 Highlights", "make package VERSION=0.3.2", "make checksums VERSION=0.3.2", "git tag -a v0.3.2 -m \"v0.3.2\"", "git push origin v0.3.2"}},
+		{"README.zh-CN.md", []string{"## v0.3.2 主要更新", "make package VERSION=0.3.2", "make checksums VERSION=0.3.2", "git tag -a v0.3.2 -m \"v0.3.2\"", "git push origin v0.3.2"}},
 	} {
 		contents, err := os.ReadFile(check.path)
 		if err != nil {

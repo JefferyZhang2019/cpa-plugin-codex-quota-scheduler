@@ -7,6 +7,21 @@ provides a quota-aware, optimized Fill First scheduler for Codex accounts, so
 CPA selects accounts by real usability instead of relying on a static account
 order alone.
 
+## v0.3.2 Highlights
+
+- Auth-failed accounts recover automatically. A 401/`invalid_grant` token
+  refresh no longer parks an account forever: the credential reconcile detects
+  an operator re-login (a new refresh token under the same auth file),
+  immediately clears the auth-failure park, and triggers one verification
+  refresh; accounts also retry at the new `auth_failure_retry_interval`
+  (default 30m, editable on the settings page) as a backstop. Scheduling only
+  resumes after a refresh succeeds, so recovery always carries fresh quota
+  evidence.
+- Fallback logs no longer misreport every delegated request as
+  "no ordered candidates": `scheduler.fallback` now summarizes why each
+  offered candidate was excluded (for example
+  `auth_failure=2,temporary_exhausted=1`).
+
 ## v0.3.1 Highlights
 
 - Fixed a management-page crash introduced in v0.3.0: the settings form
@@ -514,8 +529,8 @@ make build
 Build release archives and checksums:
 
 ```bash
-make package VERSION=0.3.1
-make checksums VERSION=0.3.1
+make package VERSION=0.3.2
+make checksums VERSION=0.3.2
 ```
 
 Windows users can build `dist/codex-quota-scheduler.dll` with:
@@ -531,8 +546,8 @@ workflow. It tests the repository and publishes platform archives plus
 `checksums.txt`:
 
 ```bash
-git tag -a v0.3.1 -m "v0.3.1"
-git push origin v0.3.1
+git tag -a v0.3.2 -m "v0.3.2"
+git push origin v0.3.2
 ```
 
 Release archives use this naming scheme:
