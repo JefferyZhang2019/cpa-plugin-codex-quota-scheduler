@@ -61,6 +61,54 @@ func newCredentialManagementFixture(t *testing.T, observed CredentialFingerprint
 	return refresher, store, host, ActiveRoster{Confirmed: true, Health: RosterHealthy, Generation: 5, Instances: []string{"active"}}
 }
 
+func TestAutomaticExternalLoginUnparksAuthFailure(t *testing.T) {
+	now := time.Date(2026, 9, 23, 9, 0, 0, 0, time.UTC)
+	f0 := fp("subject", "refresh-0", "metadata")
+	external := fp("subject", "refresh-new", "metadata")
+	persistent := NewPersistentState()
+	persistent.TierGeneration = 5
+	persistent.Bindings["active"] = RuntimeBinding{AuthID: "active", AuthIndex: "idx", Instance: 1, Admission: 3, Generation: 5, Login: 7, Token: 11, Fingerprint: f0}
+	persistent.CredentialChains[1] = TransitionChain{Cursor: f0}
+	store := NewStateStore(filepath.Join(t.TempDir(), "runtime.json"), OSFileHooks(), nil)
+	if err := store.WriteThrough(persistent); err != nil {
+		t.Fatal(err)
+	}
+	bindings, err := NewBindingRegistry(store)
+	if err != nil {
+		t.Fatal(err)
+	}
+	host := &walHost{current: HostAuth{Fingerprint: external}}
+	credentials := mustCredentialManager(t, store, host, func() time.Time { return now }, nil)
+	state := NewPluginState(DefaultConfig())
+	state.UpsertQuota(AccountState{AuthID: "active", AuthIndex: "idx", Provider: "codex", LastSuccessAt: now.Add(-2 * time.Hour)})
+	state.RecordRefreshFailure("active", "idx", RefreshFailureAuth, "token refresh returned status 401", now.Add(-time.Hour))
+	refresher := NewQuotaRefresher(nil, state, func() time.Time { return now })
+	refresher.runtimeStore, refresher.bindings, refresher.credentials = store, bindings, credentials
+	// Park the single-flight guard so the unpark's RefreshOneSoon trigger is a
+	// deterministic no-op; the durable half (the flag clear) is under test.
+	refresher.mu.Lock()
+	refresher.refreshing = true
+	refresher.mu.Unlock()
+
+	binding := persistent.Bindings["active"]
+	refresher.reconcileActiveCredentialTails(context.Background(), map[string]RuntimeBinding{"active": binding}, nil)
+
+	account := accountByAuthID(t, state.Snapshot(now), "active")
+	if account.Refresh.AuthFailure {
+		t.Fatalf("AuthFailure still true after external login reconcile: %#v", account.Refresh)
+	}
+	if !account.Refresh.NextRetryAt.IsZero() {
+		t.Fatalf("NextRetryAt = %s, want zero after unpark", account.Refresh.NextRetryAt)
+	}
+	if due := state.DueAccounts(now); len(due) != 1 || due[0].AuthID != "active" {
+		t.Fatalf("due accounts after unpark = %#v, want active", due)
+	}
+	logs := state.Snapshot(now).Logs
+	if len(logs) == 0 || logs[len(logs)-1].Event != "credential.external_login_unparked" {
+		t.Fatalf("logs = %#v, want credential.external_login_unparked entry", logs)
+	}
+}
+
 func TestCredentialAmbiguityManagementExitsEpochSemantics(t *testing.T) {
 	f1 := fp("subject", "refresh-1", "metadata")
 	external := fp("external", "refresh-x", "metadata")

@@ -33,17 +33,22 @@ type Config struct {
 	QuotaRefreshInterval time.Duration
 	// StaleAfter classifies cache age and permits pick-time recovery. It does
 	// not own a normal-refresh deadline.
-	StaleAfter                      time.Duration
-	MonthlyMode                     MonthlyMode
-	Fallback                        FallbackMode
-	EnableUsageFeedback             bool
-	EnableResetProbe                bool
-	ProbeOnProvisionalRoster        bool
-	MaxRefreshConcurrency           int
-	QuotaEndpoint                   string
-	RefreshActiveWindow             time.Duration
-	RefreshAfterResetDelay          time.Duration
-	RefreshRetryDelays              []time.Duration
+	StaleAfter               time.Duration
+	MonthlyMode              MonthlyMode
+	Fallback                 FallbackMode
+	EnableUsageFeedback      bool
+	EnableResetProbe         bool
+	ProbeOnProvisionalRoster bool
+	MaxRefreshConcurrency    int
+	QuotaEndpoint            string
+	RefreshActiveWindow      time.Duration
+	RefreshAfterResetDelay   time.Duration
+	RefreshRetryDelays       []time.Duration
+	// AuthFailureRetryInterval is the low-frequency backoff for accounts whose
+	// token refresh failed with 401/invalid_grant. They stay excluded from
+	// scheduling until a refresh succeeds, but are retried at this interval so
+	// an operator re-login recovers without a manual refresh.
+	AuthFailureRetryInterval        time.Duration
 	RefreshOnStartup                bool
 	CircuitFailureThreshold         int
 	CircuitOpenDuration             time.Duration
@@ -119,6 +124,7 @@ type rawConfig struct {
 	RefreshActiveWindow             string `yaml:"refresh_active_window"`
 	RefreshAfterResetDelay          string `yaml:"refresh_after_reset_delay"`
 	RefreshRetryDelays              string `yaml:"refresh_retry_delays"`
+	AuthFailureRetryInterval        string `yaml:"auth_failure_retry_interval"`
 	RefreshOnStartup                *bool  `yaml:"refresh_on_startup"`
 	CircuitFailureThreshold         *int   `yaml:"circuit_failure_threshold"`
 	CircuitOpenDuration             string `yaml:"circuit_open_duration"`
@@ -156,6 +162,7 @@ func DefaultConfig() Config {
 		RefreshActiveWindow:             time.Hour,
 		RefreshAfterResetDelay:          time.Minute,
 		RefreshRetryDelays:              []time.Duration{time.Minute, 5 * time.Minute, 15 * time.Minute},
+		AuthFailureRetryInterval:        30 * time.Minute,
 		RefreshOnStartup:                false,
 		CircuitFailureThreshold:         5,
 		CircuitOpenDuration:             30 * time.Minute,
@@ -206,6 +213,9 @@ func NormalizeConfig(cfg Config) Config {
 		cfg.RefreshAfterResetDelay = defaults.RefreshAfterResetDelay
 	}
 	cfg.RefreshRetryDelays = normalizeRetryDelays(cfg.RefreshRetryDelays, defaults.RefreshRetryDelays)
+	if cfg.AuthFailureRetryInterval <= 0 {
+		cfg.AuthFailureRetryInterval = defaults.AuthFailureRetryInterval
+	}
 	if cfg.CircuitFailureThreshold <= 0 {
 		cfg.CircuitFailureThreshold = defaults.CircuitFailureThreshold
 	}
@@ -339,6 +349,16 @@ func DecodeConfig(raw []byte) (Config, error) {
 			return Config{}, fmt.Errorf("refresh_retry_delays: %w", err)
 		}
 		cfg.RefreshRetryDelays = delays
+	}
+	if decoded.AuthFailureRetryInterval != "" {
+		d, err := time.ParseDuration(decoded.AuthFailureRetryInterval)
+		if err != nil {
+			return Config{}, fmt.Errorf("auth_failure_retry_interval: %w", err)
+		}
+		if d <= 0 {
+			return Config{}, fmt.Errorf("auth_failure_retry_interval must be positive")
+		}
+		cfg.AuthFailureRetryInterval = d
 	}
 	if decoded.RefreshOnStartup != nil {
 		cfg.RefreshOnStartup = *decoded.RefreshOnStartup

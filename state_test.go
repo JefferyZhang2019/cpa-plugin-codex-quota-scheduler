@@ -730,7 +730,7 @@ func TestClosedCircuitProbeFailureControlsRefreshDue(t *testing.T) {
 	}
 }
 
-func TestRecordRefreshAuthFailureStopsRetry(t *testing.T) {
+func TestRecordRefreshAuthFailureSchedulesBackoffRetry(t *testing.T) {
 	now := time.Date(2026, 6, 27, 10, 0, 0, 0, time.UTC)
 	store := NewPluginState(DefaultConfig())
 	store.UpsertQuota(AccountState{AuthID: "auth-1", AuthIndex: "idx-1", Provider: "codex"})
@@ -741,8 +741,18 @@ func TestRecordRefreshAuthFailureStopsRetry(t *testing.T) {
 	if !updated.Refresh.AuthFailure {
 		t.Fatal("AuthFailure = false, want true")
 	}
-	if !updated.Refresh.NextRetryAt.IsZero() {
-		t.Fatalf("NextRetryAt = %s, want zero", updated.Refresh.NextRetryAt)
+	// Auth failure parks scheduling but retries at the low-frequency backoff
+	// so an operator re-login recovers without a manual refresh.
+	want := now.Add(DefaultConfig().AuthFailureRetryInterval)
+	if !updated.Refresh.NextRetryAt.Equal(want) {
+		t.Fatalf("NextRetryAt = %s, want %s", updated.Refresh.NextRetryAt, want)
+	}
+	if due := store.DueAccounts(now); len(due) != 0 {
+		t.Fatalf("due accounts before backoff = %#v, want none", due)
+	}
+	due := store.DueAccounts(want)
+	if len(due) != 1 || due[0].AuthID != "auth-1" {
+		t.Fatalf("due accounts at backoff deadline = %#v, want auth-1", due)
 	}
 }
 
@@ -777,10 +787,57 @@ func TestAccountRefreshDueReasons(t *testing.T) {
 	if due, reason := accountRefreshDue(retry, cfg, now); !due || reason != "retry_due" {
 		t.Fatalf("retry due=%v reason=%q, want true retry_due", due, reason)
 	}
-	authFailed := AccountState{AuthID: "a", LastSuccessAt: now.Add(-6 * time.Hour)}
-	authFailed.Refresh.AuthFailure = true
-	if due, reason := accountRefreshDue(authFailed, cfg, now); due || reason != "auth_failure" {
-		t.Fatalf("auth failure due=%v reason=%q, want false auth_failure", due, reason)
+	authWait := AccountState{AuthID: "a", LastSuccessAt: now.Add(-time.Hour)}
+	authWait.Refresh.AuthFailure = true
+	authWait.Refresh.NextRetryAt = now.Add(15 * time.Minute)
+	if due, reason := accountRefreshDue(authWait, cfg, now); due || reason != "retry_wait" {
+		t.Fatalf("auth failure before backoff due=%v reason=%q, want false retry_wait", due, reason)
+	}
+	authDue := authWait
+	authDue.Refresh.NextRetryAt = now.Add(-time.Second)
+	if due, reason := accountRefreshDue(authDue, cfg, now); !due || reason != "retry_due" {
+		t.Fatalf("auth failure after backoff due=%v reason=%q, want true retry_due", due, reason)
+	}
+}
+
+func TestClearAccountAuthFailure(t *testing.T) {
+	now := time.Date(2026, 6, 27, 10, 0, 0, 0, time.UTC)
+	store := NewPluginState(DefaultConfig())
+	store.UpsertQuota(AccountState{AuthID: "auth-1", AuthIndex: "idx-1", Provider: "codex", LastSuccessAt: now.Add(-2 * time.Hour)})
+	if store.ClearAccountAuthFailure("auth-1") {
+		t.Fatal("ClearAccountAuthFailure = true without auth failure, want false")
+	}
+	store.RecordRefreshFailure("auth-1", "idx-1", RefreshFailureAuth, "please re-login", now)
+	if due := store.DueAccounts(now); len(due) != 0 {
+		t.Fatalf("due accounts while parked = %#v, want none", due)
+	}
+	if !store.ClearAccountAuthFailure("auth-1") {
+		t.Fatal("ClearAccountAuthFailure = false with auth failure, want true")
+	}
+	if store.ClearAccountAuthFailure("auth-1") {
+		t.Fatal("ClearAccountAuthFailure = true on second call, want false")
+	}
+	account := store.Snapshot(now).Accounts[0]
+	if account.Refresh.AuthFailure {
+		t.Fatal("AuthFailure still true after clear")
+	}
+	if !account.Refresh.NextRetryAt.IsZero() {
+		t.Fatalf("NextRetryAt = %s, want zero after clear", account.Refresh.NextRetryAt)
+	}
+	if due := store.DueAccounts(now); len(due) != 1 || due[0].AuthID != "auth-1" {
+		t.Fatalf("due accounts after clear = %#v, want auth-1", due)
+	}
+}
+
+func TestNextRefreshDueAtIncludesAuthFailureRetry(t *testing.T) {
+	now := time.Date(2026, 6, 27, 10, 0, 0, 0, time.UTC)
+	store := NewPluginState(DefaultConfig())
+	store.RecordCodexActivity(now)
+	store.UpsertQuota(AccountState{AuthID: "auth-1", AuthIndex: "idx-1", Provider: "codex", LastSuccessAt: now})
+	store.RecordRefreshFailure("auth-1", "idx-1", RefreshFailureAuth, "please re-login", now)
+	want := now.Add(DefaultConfig().AuthFailureRetryInterval)
+	if got := store.NextRefreshDueAt(now); !got.Equal(want) {
+		t.Fatalf("NextRefreshDueAt = %s, want %s", got, want)
 	}
 }
 

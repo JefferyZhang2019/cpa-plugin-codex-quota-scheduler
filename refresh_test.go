@@ -1274,8 +1274,8 @@ func TestRefreshTokenFailure401MarksAuthFailure(t *testing.T) {
 	if !account.Refresh.AuthFailure {
 		t.Fatalf("AuthFailure = false, want true: %#v", account.Refresh)
 	}
-	if !account.Refresh.NextRetryAt.IsZero() {
-		t.Fatalf("NextRetryAt = %s, want zero", account.Refresh.NextRetryAt)
+	if want := now.Add(DefaultConfig().AuthFailureRetryInterval); !account.Refresh.NextRetryAt.Equal(want) {
+		t.Fatalf("NextRetryAt = %s, want %s", account.Refresh.NextRetryAt, want)
 	}
 }
 
@@ -1301,8 +1301,8 @@ func TestRefreshTokenFailure400InvalidGrantMarksAuthFailure(t *testing.T) {
 	if !account.Refresh.AuthFailure {
 		t.Fatalf("AuthFailure = false, want true: %#v", account.Refresh)
 	}
-	if !account.Refresh.NextRetryAt.IsZero() {
-		t.Fatalf("NextRetryAt = %s, want zero", account.Refresh.NextRetryAt)
+	if want := now.Add(DefaultConfig().AuthFailureRetryInterval); !account.Refresh.NextRetryAt.Equal(want) {
+		t.Fatalf("NextRetryAt = %s, want %s", account.Refresh.NextRetryAt, want)
 	}
 }
 
@@ -1330,6 +1330,65 @@ func TestRefreshTokenFailure403SchedulesRetry(t *testing.T) {
 	}
 	if !account.Refresh.NextRetryAt.Equal(now.Add(time.Minute)) {
 		t.Fatalf("NextRetryAt = %s, want %s", account.Refresh.NextRetryAt, now.Add(time.Minute))
+	}
+}
+
+func TestAuthFailureAccountRetriesAfterBackoffIntervalAndRecovers(t *testing.T) {
+	start := time.Date(2026, 9, 23, 9, 0, 0, 0, time.UTC)
+	oldIDToken := makeUnsignedJWT(t, map[string]any{"chatgpt_account_id": "acct-1"})
+	newIDToken := makeUnsignedJWT(t, map[string]any{"chatgpt_account_id": "acct-1"})
+	clock := start
+	host := &fakeHostClient{
+		authList: []pluginapi.HostAuthFileEntry{{ID: "auth-1", AuthIndex: "idx-1", Provider: "codex"}},
+		authJSON: map[string]json.RawMessage{
+			"idx-1": json.RawMessage(`{"access_token":"old-access","refresh_token":"old-refresh","id_token":"` + oldIDToken + `","account_id":"acct-1","expired":"` + start.Add(-time.Hour).Format(time.RFC3339) + `"}`),
+		},
+		expectedAuthByAccount: map[string]string{"acct-1": "Bearer new-access"},
+		responseByURL: map[string]pluginapi.HTTPResponse{
+			codexTokenEndpoint: {StatusCode: http.StatusUnauthorized, Body: []byte(`{"error":"invalid_grant"}`)},
+		},
+	}
+	store := NewPluginState(DefaultConfig())
+	refresher := newAdmittedQuotaRefresherForTest(host, store, func() time.Time { return clock })
+	store.RecordCodexActivity(start)
+
+	// The 401 token refresh parks the account with the low-frequency backoff.
+	if err := refresher.RefreshOnce(); err != nil {
+		t.Fatalf("RefreshOnce returned error: %v", err)
+	}
+	account := accountByAuthID(t, store.Snapshot(start), "auth-1")
+	if !account.Refresh.AuthFailure {
+		t.Fatal("AuthFailure = false after 401, want true")
+	}
+
+	// The operator re-logs in: the auth file now carries fresh credentials.
+	host.authJSON["idx-1"] = json.RawMessage(`{"access_token":"new-access","refresh_token":"new-refresh","id_token":"` + newIDToken + `","account_id":"acct-1"}`)
+	host.responseByURL = nil
+	host.httpBody = []byte(`{"rate_limit":{"primary_window":{"used_percent":10,"limit_window_seconds":18000,"reset_after_seconds":3600},"secondary_window":{"used_percent":20,"limit_window_seconds":604800,"reset_after_seconds":86400}}}`)
+
+	// Before the backoff deadline the parked account is not refreshed.
+	clock = start.Add(29 * time.Minute)
+	store.RecordCodexActivity(clock)
+	if err := refresher.RefreshDueOnce(); err != nil {
+		t.Fatalf("RefreshDueOnce before backoff returned error: %v", err)
+	}
+	if account := accountByAuthID(t, store.Snapshot(clock), "auth-1"); !account.Refresh.AuthFailure {
+		t.Fatal("AuthFailure cleared before backoff deadline, want still parked")
+	}
+
+	// Past the deadline the retry runs; the successful refresh recovers.
+	clock = start.Add(31 * time.Minute)
+	store.RecordCodexActivity(clock)
+	if err := refresher.RefreshDueOnce(); err != nil {
+		t.Fatalf("RefreshDueOnce after backoff returned error: %v", err)
+	}
+	host.assertNoHeaderErrors(t)
+	account = accountByAuthID(t, store.Snapshot(clock), "auth-1")
+	if account.Refresh.AuthFailure {
+		t.Fatalf("AuthFailure still true after successful retry: %#v", account.Refresh)
+	}
+	if !account.LastSuccessAt.Equal(clock) {
+		t.Fatalf("LastSuccessAt = %s, want %s", account.LastSuccessAt, clock)
 	}
 }
 
@@ -1593,8 +1652,8 @@ func TestRefreshFailure401MarksAuthFailureWithoutRetry(t *testing.T) {
 	if !account.Refresh.AuthFailure {
 		t.Fatal("AuthFailure = false, want true")
 	}
-	if !account.Refresh.NextRetryAt.IsZero() {
-		t.Fatalf("NextRetryAt = %s, want zero", account.Refresh.NextRetryAt)
+	if want := now.Add(DefaultConfig().AuthFailureRetryInterval); !account.Refresh.NextRetryAt.Equal(want) {
+		t.Fatalf("NextRetryAt = %s, want %s", account.Refresh.NextRetryAt, want)
 	}
 }
 

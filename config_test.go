@@ -158,6 +158,28 @@ refresh_on_startup: true
 	}
 }
 
+func TestAuthFailureRetryIntervalConfig(t *testing.T) {
+	cfg := DefaultConfig()
+	if cfg.AuthFailureRetryInterval != 30*time.Minute {
+		t.Fatalf("default AuthFailureRetryInterval = %s, want 30m", cfg.AuthFailureRetryInterval)
+	}
+	cfg, err := DecodeConfig([]byte("auth_failure_retry_interval: 2h\n"))
+	if err != nil {
+		t.Fatalf("DecodeConfig returned error: %v", err)
+	}
+	if cfg.AuthFailureRetryInterval != 2*time.Hour {
+		t.Fatalf("AuthFailureRetryInterval = %s, want 2h", cfg.AuthFailureRetryInterval)
+	}
+	if _, err := DecodeConfig([]byte("auth_failure_retry_interval: 0s\n")); err == nil {
+		t.Fatal("DecodeConfig accepted non-positive auth_failure_retry_interval")
+	}
+	cfg.AuthFailureRetryInterval = 0
+	normalized := NormalizeConfig(cfg)
+	if normalized.AuthFailureRetryInterval != 30*time.Minute {
+		t.Fatalf("normalized AuthFailureRetryInterval = %s, want 30m", normalized.AuthFailureRetryInterval)
+	}
+}
+
 func TestDecodeConfigRejectsInvalidAdaptiveRefresh(t *testing.T) {
 	tests := []string{
 		"refresh_active_window: 0s\n",

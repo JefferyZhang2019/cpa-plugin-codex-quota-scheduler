@@ -181,7 +181,11 @@ func logSchedulerDecision(store *PluginState, req pluginapi.SchedulerPickRequest
 		event = "scheduler.fallback"
 		message = "插件触发内置调度 fallback"
 		fields["fallback"] = decision.DelegateBuiltin
-		fields["unavailable_summary"] = unavailableSummary(decision.Ordered)
+		summary := decision.UnavailableSummary
+		if summary == "" {
+			summary = unavailableSummary(decision.Ordered)
+		}
+		fields["unavailable_summary"] = summary
 	} else if decision.Handled {
 		event = "scheduler.handled"
 		message = "插件已处理但未选择账号"

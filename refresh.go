@@ -171,6 +171,9 @@ func (r *QuotaRefresher) ResolveCredentialAmbiguity(ctx context.Context, roster 
 			generations[active.Instance] = TierGeneration(active.Generation)
 		}
 		r.coordinator.activateInstances(generations)
+		// The operator confirmed the external login through the UI: unpark the
+		// account and verify the new credential with one refresh.
+		r.unparkAfterExternalLogin(authID)
 	}
 	return nil
 }
@@ -686,6 +689,24 @@ func (r *QuotaRefresher) PublishAuthoritativeRoster(ctx context.Context, roster 
 	return nil
 }
 
+// unparkAfterExternalLogin re-admits an account whose credentials were
+// replaced by an operator re-login (confirmed through the credential
+// reconcile). Clearing the auth-failure flag returns the account to the
+// refresh pool; the immediately triggered single-account refresh supplies the
+// quota evidence scheduling still requires before the account becomes
+// selectable again. A failed verification simply re-parks the account.
+func (r *QuotaRefresher) unparkAfterExternalLogin(authID string) {
+	if r == nil || r.state == nil || authID == "" {
+		return
+	}
+	if !r.state.ClearAccountAuthFailure(authID) {
+		return
+	}
+	r.state.RecordLog("info", "credential.external_login_unparked", "检测到账号重新登录，已解除认证异常停机并触发验证刷新", map[string]any{"auth_id": authID}, r.now())
+	publishSchedulerState(r.state, highestTierSet(r.runtimeRoster()), r.now())
+	r.RefreshOneSoon(authID)
+}
+
 func (r *QuotaRefresher) reconcileActiveCredentialTails(ctx context.Context, bindings map[string]RuntimeBinding, freshlyObserved map[string]struct{}) {
 	if r == nil || r.credentials == nil || len(bindings) == 0 {
 		return
@@ -742,6 +763,9 @@ func (r *QuotaRefresher) reconcileActiveCredentialTails(ctx context.Context, bin
 			if ok && r.coordinator != nil {
 				r.coordinator.activateInstances(map[AuthInstanceID]TierGeneration{current.Instance: TierGeneration(current.Generation)})
 			}
+			// The binding accepted the re-login; carry the account out of its
+			// auth-failure park and verify the new credential with one refresh.
+			r.unparkAfterExternalLogin(authID)
 		}
 	}
 }

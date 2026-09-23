@@ -285,6 +285,7 @@ stale_after: 5h
 refresh_active_window: 1h
 refresh_after_reset_delay: 1m
 refresh_retry_delays: 1m,5m,15m
+auth_failure_retry_interval: 30m
 refresh_on_startup: false
 monthly_mode: expiry_order
 fallback: fill-first
@@ -306,6 +307,17 @@ log_retention: 24h
 - `priority`：在同一个可选择类别和插件优先级中，月度账号排在周度账号前面。
 
 `quota_endpoint` 被限制为预期的 ChatGPT 额度端点，不能改为任意主机。
+
+### 认证失败自动恢复
+
+当账号的 token 刷新收到 401/`invalid_grant` 时，账号会被排除出调度，但不再永久停机：
+
+- 账号会按 `auth_failure_retry_interval`（默认 30 分钟）低频重试 token 刷新，
+  重新登录后无需手动刷新，退避时间一到即自动恢复；
+- 凭据对账还能直接识别操作员重新登录（同一认证文件下出现新的 refresh token）：
+  立即清除认证异常停机并触发一次验证刷新，恢复不必等待退避；
+- 只有该次刷新成功后账号才重新参与调度，恢复始终携带新的额度证据；
+  验证失败（例如重新登录未生效）只会重新停机等待下次重试。
 
 ## 模型重试链
 

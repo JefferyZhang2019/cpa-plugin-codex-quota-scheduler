@@ -1254,8 +1254,11 @@ func TestStatusPayloadIncludesAuthFailureVisibility(t *testing.T) {
 	if !account.AuthFailure {
 		t.Fatal("AuthFailure = false, want true")
 	}
-	if account.RefreshDueReason != "auth_failure" {
-		t.Fatalf("RefreshDueReason = %q, want auth_failure", account.RefreshDueReason)
+	// Auth failures no longer park the refresh; without a retry deadline the
+	// account simply reports the ordinary never-refreshed due reason while the
+	// AuthFailure badge above keeps the re-login hint visible.
+	if account.RefreshDueReason != "never_refreshed" {
+		t.Fatalf("RefreshDueReason = %q, want never_refreshed", account.RefreshDueReason)
 	}
 }
 

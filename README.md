@@ -346,6 +346,7 @@ stale_after: 5h
 refresh_active_window: 1h
 refresh_after_reset_delay: 1m
 refresh_retry_delays: 1m,5m,15m
+auth_failure_retry_interval: 30m
 refresh_on_startup: false
 monthly_mode: expiry_order
 fallback: fill-first
@@ -370,6 +371,21 @@ log_retention: 24h
 
 `quota_endpoint` is restricted to the expected ChatGPT quota endpoint and cannot
 be redirected to an arbitrary host.
+
+### Auth-failure recovery
+
+When an account's token refresh fails with 401/`invalid_grant` the account is
+excluded from scheduling, but it is no longer parked forever:
+
+- the account retries its token refresh at `auth_failure_retry_interval`
+  (default 30m), so a re-login recovers automatically once the backoff elapses;
+- the credential reconcile also detects an operator re-login directly (a new
+  refresh token under the same auth file): it immediately clears the
+  auth-failure park and triggers one verification refresh, so recovery does
+  not wait for the backoff;
+- scheduling only resumes after that refresh succeeds, so recovery always
+  carries fresh quota evidence. A failed verification simply re-parks the
+  account.
 
 ## Model Retry Chain
 

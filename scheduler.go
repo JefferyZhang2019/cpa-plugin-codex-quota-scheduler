@@ -13,6 +13,10 @@ type PickDecision struct {
 	DelegateBuiltin string
 	Reason          string
 	Ordered         []ScheduledAccount
+	// UnavailableSummary explains a fallback decision from the published
+	// snapshot when the Ordered list is not populated (the pick path never
+	// builds it), e.g. "auth_failure=2,temporary_exhausted=1".
+	UnavailableSummary string
 }
 
 type ScheduledAccount struct {

@@ -75,7 +75,7 @@ func TestStreamChunkInterceptIsReadOnlyAndAttributes(t *testing.T) {
 
 	payload, err := json.Marshal(pluginapi.StreamChunkInterceptRequest{
 		RequestID: "req-1", ChunkIndex: 3,
-		Body: []byte("event: codex.rate_limits\ndata: {\"rate_limits\":{\"primary\":{\"used_percent\":40,\"window_minutes\":300,\"reset_after_seconds\":3600}}}\n\n"),
+		Body:     []byte("event: codex.rate_limits\ndata: {\"rate_limits\":{\"primary\":{\"used_percent\":40,\"window_minutes\":300,\"reset_after_seconds\":3600}}}\n\n"),
 		Metadata: map[string]any{"selected_auth_id": "team"},
 	})
 	if err != nil {
@@ -113,7 +113,7 @@ func TestUsageRecordHeadersObserveQuotaOnSuccessOnly(t *testing.T) {
 	// marker: the upstream just refused to serve the account.
 	HandleUsageFeedback(store, pluginapi.UsageRecord{
 		Provider: "codex", AuthID: "team", AuthIndex: "idx-team", Failed: true,
-		Failure:        pluginapi.UsageFailure{StatusCode: 429, Body: `{"error":{"type":"usage_limit_reached","resets_in_seconds":7200}}`},
+		Failure:         pluginapi.UsageFailure{StatusCode: 429, Body: `{"error":{"type":"usage_limit_reached","resets_in_seconds":7200}}`},
 		ResponseHeaders: map[string][]string{"X-Codex-Primary-Used-Percent": {"0"}, "X-Codex-Primary-Window-Minutes": {"300"}, "X-Codex-Primary-Reset-After-Seconds": {"18000"}},
 	}, now)
 	if account := accountByAuthID(t, store.Snapshot(now), "team"); !account.TemporaryExhausted {

@@ -366,6 +366,28 @@ func (s *PluginState) ClearAccountTemporaryExhausted(authID string) bool {
 	return true
 }
 
+// ClearAccountAuthFailure unparks an account whose token refresh failed with
+// 401 after the operator re-logged in and the credential reconcile confirmed
+// an external login (new refresh token under the same auth file). It only
+// re-admits the account to the refresh pool; scheduling stays excluded until
+// the triggered refresh succeeds — recovery still needs quota evidence.
+func (s *PluginState) ClearAccountAuthFailure(authID string) bool {
+	if authID == "" {
+		return false
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	key, account, ok := s.findAccountLocked(authID, "")
+	if !ok || !account.Refresh.AuthFailure {
+		return false
+	}
+	account.Refresh.AuthFailure = false
+	account.Refresh.RetryAttempt = 0
+	account.Refresh.NextRetryAt = time.Time{}
+	s.accounts[key] = account
+	return true
+}
+
 // ObserveAccountQuota merges quota state observed inside a real response
 // stream into the cached account. An observation is bound to an actual call,
 // so it both refreshes the cache (deferring the polling refresh) and runs the
@@ -503,7 +525,7 @@ func (s *PluginState) RecordRefreshFailure(authID, authIndex string, kind Refres
 	account.Refresh.LastFailureAt = now
 	if kind == RefreshFailureAuth || kind == RefreshFailureLocal {
 		account.Refresh.AuthFailure = kind == RefreshFailureAuth
-		account.Refresh.NextRetryAt = time.Time{}
+		account.Refresh.NextRetryAt = s.authFailureRetryDeadlineLocked(now, kind)
 	} else {
 		account.Refresh.AuthFailure = false
 		account.Refresh.RetryAttempt++
@@ -528,7 +550,7 @@ func (s *PluginState) ApplyQuotaRefreshFailureIfAdmissionCurrent(account Account
 	account.Refresh.LastFailureAt = now
 	if kind == RefreshFailureAuth || kind == RefreshFailureLocal {
 		account.Refresh.AuthFailure = kind == RefreshFailureAuth
-		account.Refresh.NextRetryAt = time.Time{}
+		account.Refresh.NextRetryAt = s.authFailureRetryDeadlineLocked(now, kind)
 	} else {
 		account.Refresh.AuthFailure = false
 		account.Refresh.RetryAttempt++
@@ -716,7 +738,9 @@ func (s *PluginState) NextRefreshDueAt(now time.Time) time.Time {
 		}
 	}
 	for _, account := range s.accounts {
-		if account.Refresh.AuthFailure || account.Refresh.LastFailureKind == RefreshFailureLocal {
+		// Local failures are structural and own no deadline. Auth failures keep
+		// their low-frequency retry deadline below so the loop wakes for them.
+		if account.Refresh.LastFailureKind == RefreshFailureLocal {
 			continue
 		}
 		if !account.Circuit.NextProbeAt.IsZero() {
@@ -779,9 +803,9 @@ func retainedLogs(logs []LogEntry, cfg Config, now time.Time) []LogEntry {
 
 func accountRefreshDue(account AccountState, cfg Config, now time.Time) (bool, string) {
 	cfg = NormalizeConfig(cfg)
-	if account.Refresh.AuthFailure {
-		return false, "auth_failure"
-	}
+	// Auth failures no longer park the account permanently: the flag keeps it
+	// excluded from scheduling, but the retry deadline below re-admits it to
+	// the refresh pool at the low-frequency backoff.
 	if account.Refresh.LastFailureKind == RefreshFailureLocal {
 		return false, "local_failure"
 	}
@@ -851,6 +875,18 @@ func retryDelayForAttempt(cfg Config, attempt int) time.Duration {
 		index = len(delays) - 1
 	}
 	return delays[index]
+}
+
+// authFailureRetryDeadlineLocked returns the retry deadline for terminal
+// refresh failures. Auth failures (401/invalid_grant) park the account from
+// scheduling but retry at the low-frequency backoff so an operator re-login
+// recovers without a manual refresh; local failures are structural and never
+// retry. Callers must hold s.mu.
+func (s *PluginState) authFailureRetryDeadlineLocked(now time.Time, kind RefreshFailureKind) time.Time {
+	if kind != RefreshFailureAuth {
+		return time.Time{}
+	}
+	return now.Add(NormalizeConfig(s.cfg).AuthFailureRetryInterval)
 }
 
 func accountStateKey(account AccountState) string {
