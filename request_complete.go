@@ -28,6 +28,8 @@ func handleRequestCompletionEvent(store *PluginState, completion pluginapi.Reque
 	if store == nil || completion.RequestID == "" {
 		return
 	}
+	// Streams may finish without a quota event; release their retained buffers.
+	globalStreamObservers.forget(completion.RequestID)
 	if now.IsZero() {
 		now = time.Now()
 	}
