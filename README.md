@@ -7,6 +7,17 @@ provides a quota-aware, optimized Fill First scheduler for Codex accounts, so
 CPA selects accounts by real usability instead of relying on a static account
 order alone.
 
+## v0.3.3 Highlights
+
+- Fixed a per-request memory leak in the response stream observer
+  (contributed in [#16](https://github.com/JefferyZhang2019/cpa-plugin-codex-quota-scheduler/pull/16)):
+  streams that finish without emitting a `codex.rate_limits` frame kept their
+  observer and buffer backing array in the global registry forever. Observers
+  are now released from the request-completion hook for every terminal
+  outcome, including failed, canceled, and rejected requests.
+- SDK dependency bumped to CLIProxyAPI v7.3.20 — the final v7-line build. The
+  next major line migrates to the v8 SDK.
+
 ## v0.3.2 Highlights
 
 - Auth-failed accounts recover automatically. A 401/`invalid_grant` token
@@ -529,8 +540,8 @@ make build
 Build release archives and checksums:
 
 ```bash
-make package VERSION=0.3.2
-make checksums VERSION=0.3.2
+make package VERSION=0.3.3
+make checksums VERSION=0.3.3
 ```
 
 Windows users can build `dist/codex-quota-scheduler.dll` with:
@@ -546,8 +557,8 @@ workflow. It tests the repository and publishes platform archives plus
 `checksums.txt`:
 
 ```bash
-git tag -a v0.3.2 -m "v0.3.2"
-git push origin v0.3.2
+git tag -a v0.3.3 -m "v0.3.3"
+git push origin v0.3.3
 ```
 
 Release archives use this naming scheme:

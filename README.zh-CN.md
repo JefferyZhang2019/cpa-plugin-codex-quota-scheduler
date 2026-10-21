@@ -6,6 +6,16 @@
 账号提供额度感知的优化版 Fill First 调度，让 CPA 按账号的真实可用性选择账号，
 而不只是依赖固定的账号顺序。
 
+## v0.3.3 主要更新
+
+- 修复响应流观察器的每请求内存泄漏（来自
+  [#16](https://github.com/JefferyZhang2019/cpa-plugin-codex-quota-scheduler/pull/16)
+  的贡献）：未产出 `codex.rate_limits` 帧的流在结束后，其观察器和缓冲底层数组
+  会永久留在全局注册表中。现在观察器会在请求完成钩子里按全部四种终态释放，
+  覆盖成功、失败、取消和拒绝的请求。
+- SDK 依赖升级到 CLIProxyAPI v7.3.20 —— v7 系列的最后一个版本。下一个大版本
+  将迁移到 v8 SDK。
+
 ## v0.3.2 主要更新
 
 - 认证失败账号自动恢复。token 刷新收到 401/`invalid_grant` 不再把账号永久停机：
@@ -450,8 +460,8 @@ make build
 构建发布压缩包和校验文件：
 
 ```bash
-make package VERSION=0.3.2
-make checksums VERSION=0.3.2
+make package VERSION=0.3.3
+make checksums VERSION=0.3.3
 ```
 
 Windows 用户可以用以下命令构建 `dist/codex-quota-scheduler.dll`：
@@ -466,8 +476,8 @@ Windows 用户可以用以下命令构建 `dist/codex-quota-scheduler.dll`：
 仓库，并发布各平台压缩包和 `checksums.txt`：
 
 ```bash
-git tag -a v0.3.2 -m "v0.3.2"
-git push origin v0.3.2
+git tag -a v0.3.3 -m "v0.3.3"
+git push origin v0.3.3
 ```
 
 发布包使用以下命名方式：
