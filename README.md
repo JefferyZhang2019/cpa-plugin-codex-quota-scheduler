@@ -7,6 +7,25 @@ provides a quota-aware, optimized Fill First scheduler for Codex accounts, so
 CPA selects accounts by real usability instead of relying on a static account
 order alone.
 
+## v0.4.0 Highlights
+
+- **Migrated to the CLIProxyAPI v8 SDK.** The plugin now builds against
+  `router-for-me/CLIProxyAPI/v8` (v8.0.36). The ABI surface it consumes is
+  additive-only against the v7 line, and ABIVersion stays 1, so the binary
+  also loads on CPA v7.3.x hosts.
+- **"Refresh Quota" now clears the CPA core cooldown (#14).** A manual
+  per-account refresh whose fresh quota proves remaining capacity also
+  invokes `host.routing.reset_cooldown` for the credential, so a recovered
+  account no longer stays hard-blocked by the core's own cooldown state.
+  Hosts predating the v8 plugin ABI keep plugin-side recovery and log a
+  warning instead of failing.
+- **Management UI redesigned (v4).** Four hash-routed pages (Overview / Logs
+  / Settings / Retry Chain), design-token stylesheet, settings regrouped
+  into five cards with number+unit duration inputs (API payloads
+  unchanged), a four-way segmented retry mode replacing three confusing
+  toggles, per-page save isolation, JS-only account card rendering with a
+  compact priority line, log level filter chips, and toast notifications.
+
 ## v0.3.3 Highlights
 
 - Fixed a per-request memory leak in the response stream observer
@@ -540,8 +559,8 @@ make build
 Build release archives and checksums:
 
 ```bash
-make package VERSION=0.3.3
-make checksums VERSION=0.3.3
+make package VERSION=0.4.0
+make checksums VERSION=0.4.0
 ```
 
 Windows users can build `dist/codex-quota-scheduler.dll` with:
@@ -557,8 +576,8 @@ workflow. It tests the repository and publishes platform archives plus
 `checksums.txt`:
 
 ```bash
-git tag -a v0.3.3 -m "v0.3.3"
-git push origin v0.3.3
+git tag -a v0.4.0 -m "v0.4.0"
+git push origin v0.4.0
 ```
 
 Release archives use this naming scheme:
