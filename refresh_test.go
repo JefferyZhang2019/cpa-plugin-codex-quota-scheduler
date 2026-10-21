@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/router-for-me/CLIProxyAPI/v7/sdk/pluginapi"
+	"github.com/router-for-me/CLIProxyAPI/v8/sdk/pluginapi"
 )
 
 type fakeHostClient struct {
@@ -19,6 +19,10 @@ type fakeHostClient struct {
 	httpBody []byte
 	saved    map[string]json.RawMessage
 	listErr  error
+
+	resetCooldownCalls   []string
+	resetCooldownErr     error
+	resetCooldownModels  []string
 
 	expectedAuthByAccount map[string]string
 	responseByAccount     map[string]pluginapi.HTTPResponse
@@ -91,6 +95,16 @@ func (f *fakeHostClient) SaveAuth(name string, raw json.RawMessage) error {
 	}
 	f.saved[name] = append(json.RawMessage(nil), raw...)
 	return nil
+}
+
+func (f *fakeHostClient) ResetRoutingCooldown(authIndex string) (pluginapi.HostRoutingResetCooldownResponse, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.resetCooldownCalls = append(f.resetCooldownCalls, authIndex)
+	if f.resetCooldownErr != nil {
+		return pluginapi.HostRoutingResetCooldownResponse{}, f.resetCooldownErr
+	}
+	return pluginapi.HostRoutingResetCooldownResponse{AuthIndex: authIndex, Models: f.resetCooldownModels}, nil
 }
 
 func (f *fakeHostClient) Do(req pluginapi.HTTPRequest) (pluginapi.HTTPResponse, error) {
@@ -198,6 +212,12 @@ func (f *fakeHostClient) maxActiveHTTP() int {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return f.maxActive
+}
+
+func (f *fakeHostClient) resetCooldownCallsSnapshot() []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]string(nil), f.resetCooldownCalls...)
 }
 
 func (f *fakeHostClient) httpCallCount() int {
@@ -2160,7 +2180,7 @@ func TestRefreshOneOverridesHostUnavailableAndRecoversTemporaryExhausted(t *test
 		t.Fatalf("TemporaryResetAt = %s, want zero", account.TemporaryResetAt)
 	}
 	logs := store.Snapshot(now).Logs
-	var override, recovered bool
+	var override, recovered, coreReset bool
 	for _, entry := range logs {
 		if entry.Event == "quota.manual_refresh_override" {
 			override = true
@@ -2168,12 +2188,114 @@ func TestRefreshOneOverridesHostUnavailableAndRecoversTemporaryExhausted(t *test
 		if entry.Event == "quota.temporary_recovered" {
 			recovered = true
 		}
+		if entry.Event == "quota.core_cooldown_reset" {
+			coreReset = true
+		}
 	}
 	if !override {
 		t.Fatal("missing quota.manual_refresh_override log entry")
 	}
 	if !recovered {
 		t.Fatal("missing quota.temporary_recovered log entry")
+	}
+	if !coreReset {
+		t.Fatal("missing quota.core_cooldown_reset log entry")
+	}
+	if calls := host.resetCooldownCallsSnapshot(); len(calls) != 1 || calls[0] != "idx-team" {
+		t.Fatalf("reset cooldown calls = %v, want [idx-team]", calls)
+	}
+}
+
+// TestRefreshOneResetsCoreCooldownWithoutPluginMarker covers the issue #14
+// scenario where only the core kept the credential cooling: the plugin never
+// marked temporary exhaustion, but a verified manual recovery must still lift
+// the core cooldown so routing can resume.
+func TestRefreshOneResetsCoreCooldownWithoutPluginMarker(t *testing.T) {
+	now := time.Date(2026, 10, 6, 20, 30, 0, 0, time.UTC)
+	token := makeUnsignedJWT(t, map[string]any{"chatgpt_account_id": "acct-b"})
+	host := &fakeHostClient{
+		authList: []pluginapi.HostAuthFileEntry{
+			{ID: "b", AuthIndex: "idx-b", Provider: "codex", Unavailable: true},
+		},
+		authJSON: map[string]json.RawMessage{
+			"idx-b": json.RawMessage(`{"access_token":"access-b","id_token":"` + token + `"}`),
+		},
+		httpBody: []byte(`{"rate_limit":{"primary_window":{"used_percent":0,"limit_window_seconds":18000,"reset_after_seconds":10800},"secondary_window":{"used_percent":5,"limit_window_seconds":604800,"reset_after_seconds":86400}}}`),
+		resetCooldownModels: []string{"gpt-6.1-sol"},
+	}
+	store := NewPluginState(DefaultConfig())
+	store.RecordCodexActivity(now)
+	store.UpsertQuota(AccountState{
+		AuthID:    "b",
+		AuthIndex: "idx-b",
+		Provider:  "codex",
+		Quota: ParsedQuota{
+			Family: AccountFamilyWeekly,
+			FiveHour: &QuotaWindow{Kind: WindowFiveHour, UsedPercent: float64Ptr(0),
+				ResetAt: now.Add(3 * time.Hour)},
+			LongWindow: &QuotaWindow{Kind: WindowWeekly, UsedPercent: float64Ptr(5),
+				ResetAt: now.Add(72 * time.Hour)},
+		},
+		LastSuccessAt: now.Add(-2 * time.Hour),
+	})
+
+	refresher := newAdmittedQuotaRefresherForTest(host, store, func() time.Time { return now })
+	if err := refresher.RefreshOneAuthID("b"); err != nil {
+		t.Fatalf("RefreshOneAuthID returned error: %v", err)
+	}
+	if calls := host.resetCooldownCallsSnapshot(); len(calls) != 1 || calls[0] != "idx-b" {
+		t.Fatalf("reset cooldown calls = %v, want [idx-b]", calls)
+	}
+}
+
+// TestRefreshOneToleratesUnsupportedCoreCooldownReset verifies graceful
+// degradation on hosts predating the CPA v8 plugin ABI: the callback fails,
+// the plugin-side recovery still completes, and only a warning is recorded.
+func TestRefreshOneToleratesUnsupportedCoreCooldownReset(t *testing.T) {
+	now := time.Date(2026, 10, 6, 20, 30, 0, 0, time.UTC)
+	token := makeUnsignedJWT(t, map[string]any{"chatgpt_account_id": "acct-c"})
+	host := &fakeHostClient{
+		authList: []pluginapi.HostAuthFileEntry{
+			{ID: "c", AuthIndex: "idx-c", Provider: "codex", Unavailable: true},
+		},
+		authJSON: map[string]json.RawMessage{
+			"idx-c": json.RawMessage(`{"access_token":"access-c","id_token":"` + token + `"}`),
+		},
+		httpBody: []byte(`{"rate_limit":{"primary_window":{"used_percent":0,"limit_window_seconds":18000,"reset_after_seconds":10800},"secondary_window":{"used_percent":5,"limit_window_seconds":604800,"reset_after_seconds":86400}}}`),
+		resetCooldownErr: errors.New("unsupported host callback host.routing.reset_cooldown"),
+	}
+	store := NewPluginState(DefaultConfig())
+	store.RecordCodexActivity(now)
+	store.UpsertQuota(AccountState{
+		AuthID:    "c",
+		AuthIndex: "idx-c",
+		Provider:  "codex",
+		Quota: ParsedQuota{
+			Family: AccountFamilyWeekly,
+			FiveHour: &QuotaWindow{Kind: WindowFiveHour, UsedPercent: float64Ptr(100), Exhausted: true,
+				ResetAt: now.Add(3 * time.Hour)},
+			LongWindow: &QuotaWindow{Kind: WindowWeekly, UsedPercent: float64Ptr(100), Exhausted: true,
+				ResetAt: now.Add(72 * time.Hour)},
+		},
+		LastSuccessAt: now.Add(-2 * time.Hour),
+	})
+	store.MarkAccountTemporaryExhausted("c", now.Add(3*time.Hour), usageLimitReachedReason)
+
+	refresher := newAdmittedQuotaRefresherForTest(host, store, func() time.Time { return now })
+	if err := refresher.RefreshOneAuthID("c"); err != nil {
+		t.Fatalf("RefreshOneAuthID returned error: %v", err)
+	}
+	if account := accountByAuthID(t, store.Snapshot(now), "c"); account.TemporaryExhausted {
+		t.Fatal("TemporaryExhausted still set despite host rejecting the core reset")
+	}
+	var warned bool
+	for _, entry := range store.Snapshot(now).Logs {
+		if entry.Event == "quota.core_cooldown_reset_unavailable" {
+			warned = true
+		}
+	}
+	if !warned {
+		t.Fatal("missing quota.core_cooldown_reset_unavailable warning")
 	}
 }
 
@@ -2211,6 +2333,9 @@ func TestRefreshOneKeepsTemporaryExhaustedWhenFreshQuotaStillLimited(t *testing.
 	refresher := newAdmittedQuotaRefresherForTest(host, store, func() time.Time { return now })
 	if err := refresher.RefreshOneAuthID("k12"); err != nil {
 		t.Fatalf("RefreshOneAuthID returned error: %v", err)
+	}
+	if calls := host.resetCooldownCallsSnapshot(); len(calls) != 0 {
+		t.Fatalf("reset cooldown calls = %v, want none while quota still limited", calls)
 	}
 	account := accountByAuthID(t, store.Snapshot(now), "k12")
 	if !account.TemporaryExhausted {

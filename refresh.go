@@ -206,6 +206,10 @@ type HostClient interface {
 	SaveAuth(name string, raw json.RawMessage) error
 	Do(req pluginapi.HTTPRequest) (pluginapi.HTTPResponse, error)
 	Log(level, message string, fields map[string]any)
+	// ResetRoutingCooldown clears the core's model- and credential-level
+	// cooldown state for one credential. Introduced with the CPA v8 plugin
+	// ABI; older hosts reject the call and callers must degrade gracefully.
+	ResetRoutingCooldown(authIndex string) (pluginapi.HostRoutingResetCooldownResponse, error)
 }
 
 type ABIHostClient struct{}
@@ -1224,6 +1228,11 @@ func isManualRefreshCandidate(auth pluginapi.HostAuthFileEntry) bool {
 // observed accounts reporting 100% while model requests still hit upstream
 // 429); reconciliation runs only on the manual per-account path, where the
 // operator has confirmed an upstream reset, and on real request success.
+//
+// A verified recovery also clears the core's own cooldown for the credential
+// (issue #14): the core cooldown and the plugin's quota view are independent,
+// and while the core blocks selection every request dies before the scheduler
+// could observe the recovered capacity.
 func (r *QuotaRefresher) reconcileTemporaryExhausted(authID string, version uint64) {
 	authID = strings.TrimSpace(authID)
 	if authID == "" {
@@ -1231,21 +1240,48 @@ func (r *QuotaRefresher) reconcileTemporaryExhausted(authID string, version uint
 	}
 	now := r.now()
 	for _, account := range r.state.Snapshot(now).Accounts {
-		if account.AuthID != authID || !account.TemporaryExhausted {
+		if account.AuthID != authID {
 			continue
 		}
 		if !quotaSnapshotShowsRecovery(account.Quota, now) {
 			continue
 		}
+		if !account.TemporaryExhausted && account.AuthIndex == "" {
+			return
+		}
 		if !r.state.BeginCPAAdmissionCall(authID, version) {
 			return
 		}
-		if r.state.ClearAccountTemporaryExhausted(authID) {
+		if account.TemporaryExhausted && r.state.ClearAccountTemporaryExhausted(authID) {
 			r.recordAdmissionLog(authID, version, "info", "quota.temporary_recovered", "手动刷新证实额度已恢复，已清除临时耗尽标记", map[string]any{"auth_id": authID})
 			publishSchedulerState(r.state, highestTierSet(r.runtimeRoster()), r.now())
 		}
+		if account.AuthIndex != "" {
+			r.resetCoreCooldown(authID, account.AuthIndex, version)
+		}
 		return
 	}
+}
+
+// resetCoreCooldown asks the host to drop the core's model- and credential-
+// level cooldown state for a recovered credential. Hosts predating the CPA v8
+// plugin ABI reject the callback; that is logged and otherwise ignored so the
+// recovery still takes effect on the plugin side.
+func (r *QuotaRefresher) resetCoreCooldown(authID, authIndex string, version uint64) {
+	resp, err := r.host.ResetRoutingCooldown(authIndex)
+	if err != nil {
+		r.recordAdmissionLog(authID, version, "warn", "quota.core_cooldown_reset_unavailable", "当前 CPA 版本不支持清除核心冷却，仅插件侧恢复已生效", map[string]any{
+			"auth_id":    authID,
+			"auth_index": authIndex,
+			"error":      redactSecrets(err.Error()),
+		})
+		return
+	}
+	r.recordAdmissionLog(authID, version, "info", "quota.core_cooldown_reset", "额度恢复已确认，已同步清除 CPA 核心冷却", map[string]any{
+		"auth_id":    authID,
+		"auth_index": authIndex,
+		"models":     len(resp.Models),
+	})
 }
 
 // quotaSnapshotShowsRecovery reports whether a fresh quota read proves usable
@@ -2459,6 +2495,18 @@ func (ABIHostClient) GetAuth(authIndex string) (pluginapi.HostAuthGetResponse, e
 func (ABIHostClient) SaveAuth(name string, raw json.RawMessage) error {
 	_, err := callHostCallback(pluginabi.MethodHostAuthSave, pluginapi.HostAuthSaveRequest{Name: name, JSON: raw})
 	return err
+}
+
+func (ABIHostClient) ResetRoutingCooldown(authIndex string) (pluginapi.HostRoutingResetCooldownResponse, error) {
+	result, err := callHostCallback(pluginabi.MethodHostRoutingResetCooldown, pluginapi.HostRoutingResetCooldownRequest{AuthIndex: authIndex})
+	if err != nil {
+		return pluginapi.HostRoutingResetCooldownResponse{}, err
+	}
+	var resp pluginapi.HostRoutingResetCooldownResponse
+	if err := json.Unmarshal(result, &resp); err != nil {
+		return pluginapi.HostRoutingResetCooldownResponse{}, fmt.Errorf("decode host.routing.reset_cooldown result: %w", err)
+	}
+	return resp, nil
 }
 
 func (ABIHostClient) Do(req pluginapi.HTTPRequest) (pluginapi.HTTPResponse, error) {

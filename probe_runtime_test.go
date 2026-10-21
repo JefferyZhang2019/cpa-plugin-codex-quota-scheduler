@@ -17,7 +17,7 @@ import (
 	"time"
 
 	"github.com/jeffery/codex-quota-scheduler/testsupport"
-	"github.com/router-for-me/CLIProxyAPI/v7/sdk/pluginapi"
+	"github.com/router-for-me/CLIProxyAPI/v8/sdk/pluginapi"
 )
 
 type sequenceProbeHost struct {
@@ -236,6 +236,9 @@ func (h *sequenceProbeHost) GetAuth(authIndex string) (pluginapi.HostAuthGetResp
 	return auth, getErr
 }
 func (h *sequenceProbeHost) SaveAuth(string, json.RawMessage) error { return nil }
+func (h *sequenceProbeHost) ResetRoutingCooldown(string) (pluginapi.HostRoutingResetCooldownResponse, error) {
+	return pluginapi.HostRoutingResetCooldownResponse{}, nil
+}
 func (h *sequenceProbeHost) Log(string, string, map[string]any)     {}
 func (h *sequenceProbeHost) Do(req pluginapi.HTTPRequest) (pluginapi.HTTPResponse, error) {
 	h.mu.Lock()
