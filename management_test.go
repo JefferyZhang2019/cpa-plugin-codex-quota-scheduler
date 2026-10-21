@@ -694,8 +694,8 @@ func TestStatusHTMLRedactsSensitiveFieldsAndEscapesUserFields(t *testing.T) {
 			t.Fatalf("html contains sensitive field %q: %s", forbidden, html)
 		}
 	}
-	if strings.Contains(html, "<script>alert") || !strings.Contains(html, "&lt;script&gt;") || !strings.Contains(html, "Ops &amp; Finance") {
-		t.Fatalf("html did not escape user fields: %s", html)
+	if strings.Contains(html, "<script>alert") || !strings.Contains(html, `\u003cscript\u003e`) || !strings.Contains(html, `Ops \u0026 Finance`) {
+		t.Fatalf("user fields are not safely encoded for the JS-only card renderer: %s", html)
 	}
 }
 
@@ -713,7 +713,7 @@ func TestStatusHTMLUsesManagementAPIActionsModalProgressAndLogs(t *testing.T) {
 	}
 	html := string(resp.Body)
 	lower := strings.ToLower(html)
-	for _, want := range []string{"quota-bar", "editDialog", "logList", "openEdit", "exportLogs", "codex-quota-scheduler-logs.json", "maxLogEntries", "logRetention", "refreshOneQuota", "refreshStatus", "renderAccounts", "renderMetrics", "metricNextAuthID", "metricMonthlyMode", "metricLastSelected", "managementKeyField", "managementKey", "rememberManagementKey", "MANAGEMENT_KEY_STORAGE_KEY", "restoreRememberedManagementKey", "syncRememberedManagementKey", "syncManagementKeyVisibility", "showManagementKeyInput", "restoredManagementKey", "field.hidden=remember.checked&&restoredManagementKey", "togglePin", "createPinButton", "priority=pinned?0:999", "actions.pinAccount", "actions.unpinAccount", "notice.accountPinned", "notice.accountUnpinned", "codex-quota-scheduler-management-key-v1", "loadStatus", "MANAGEMENT_BASE", "/v0/management/plugins/codex-quota-scheduler", "authHeaders()", "localeSelect", "TRANSLATIONS", "codex-quota-scheduler-locale-v1", "Scheduler Settings", "Account Queue", "INLINE_TRANSLATIONS", "Reset credits", "Refresh Quota", "editSchedulerPriority", "account.schedulerPriority", "scheduler_priority", "Plugin priority", "插件优先级", "quotaResetTime", "resetRemainingText", "Math.floor(remaining/minute)", "Math.floor(remaining/hour)", "Math.floor(remaining/day)", "已到期", "quota-remaining", "quota-reset-label", "formatQuotaResetLabels", "label+' reset: '", "SORTED_INLINE_TRANSLATIONS", "right[0].length-left[0].length", "Circuit counts", "localeColon", "resetCreditCount", "Number(value)===1?'time':'times'", "data-i18n-aria", "queue.aria", "renderAccounts(STATUS.accounts||[])", "log.quota.refresh_success", "log.scheduler.fallback", "notice.dataset.i18nKey", "date.toLocaleString(dateLocale()", "storedLocale", "parentLocale", "window.parent.document.documentElement.lang", "watchParentLocale", "if(storedLocale())return", "attributeFilter:['lang']", "detectLocale(){return storedLocale()||parentLocale()||'en'}", `id="editSchedulerPriority"`} {
+	for _, want := range []string{"quota-bar", "editDialog", "logList", "openEdit", "exportLogs", "codex-quota-scheduler-logs.json", "maxLogEntries", "logRetention", "refreshOneQuota", "refreshStatus", "renderAccounts", "renderMetrics", "metricNextAuthID", "metricMonthlyMode", "metricLastSelected", "managementKeyField", "managementKey", "rememberManagementKey", "MANAGEMENT_KEY_STORAGE_KEY", "restoreRememberedManagementKey", "syncRememberedManagementKey", "syncManagementKeyVisibility", "showManagementKeyInput", "restoredManagementKey", "field.hidden=remember.checked&&restoredManagementKey", "togglePin", "createPinButton", "priority=pinned?0:PIN_PRIORITY", "const PIN_PRIORITY=999", "actions.pinAccount", "actions.unpinAccount", "notice.accountPinned", "notice.accountUnpinned", "codex-quota-scheduler-management-key-v1", "loadStatus", "MANAGEMENT_BASE", "/v0/management/plugins/codex-quota-scheduler", "authHeaders()", "localeSelect", "TRANSLATIONS", "codex-quota-scheduler-locale-v1", "Scheduler Settings", "Account Queue", "INLINE_TRANSLATIONS", "Reset credits", "Refresh Quota", "editSchedulerPriority", "account.schedulerPriority", "scheduler_priority", "Plugin priority", "插件优先级", "quotaResetTime", "resetRemainingText", "Math.floor(remaining/minute)", "Math.floor(remaining/hour)", "Math.floor(remaining/day)", "已到期", "quota-remaining", "quota-reset-label", "formatQuotaResetLabels", "label+' reset: '", "SORTED_INLINE_TRANSLATIONS", "right[0].length-left[0].length", "Circuit counts", "localeColon", "resetCreditCount", "Number(value)===1?'time':'times'", "data-i18n-aria", "queue.aria", "renderAccounts(STATUS.accounts||[])", "log.quota.refresh_success", "log.scheduler.fallback", "notice.dataset.i18nKey", "date.toLocaleString(dateLocale()", "storedLocale", "parentLocale", "window.parent.document.documentElement.lang", "watchParentLocale", "if(storedLocale())return", "attributeFilter:['lang']", "detectLocale(){return storedLocale()||parentLocale()||'en'}", `id="editSchedulerPriority"`} {
 		if !strings.Contains(html, want) {
 			t.Fatalf("html missing marker %q: %s", want, html)
 		}
@@ -753,12 +753,16 @@ func TestStatusHTMLStaticCardShowsDistinctPriorityBadges(t *testing.T) {
 	}
 	html := string(resp.Body)
 	for _, want := range []string{
-		`<span class="badge">CPA 优先级 3</span>`,
-		`<span class="badge">插件优先级 8</span>`,
+		`priorityLine`,
+		`' · CPA '+(account.cpa_priority||0)`,
+		`account.scheduler_priority===PIN_PRIORITY`,
 	} {
 		if !strings.Contains(html, want) {
-			t.Fatalf("static account card missing priority badge %q: %s", want, html)
+			t.Fatalf("account card renderer missing priority marker %q: %s", want, html)
 		}
+	}
+	if strings.Contains(html, `{{range .Accounts}}`) {
+		t.Fatalf("server still renders account cards; the JS renderer must be the single track")
 	}
 }
 
@@ -785,14 +789,13 @@ func TestStatusHTMLQuotaBarsUseRemainingPercentageColorBands(t *testing.T) {
 		t.Fatalf("StatusCode = %d, want %d; body=%s", resp.StatusCode, http.StatusOK, resp.Body)
 	}
 	html := string(resp.Body)
-	if got := strings.Count(html, `class="quota-fill danger"`); got != 2 {
-		t.Fatalf("danger quota bars = %d, want 2", got)
+	if strings.Contains(html, `class="quota-fill`) {
+		t.Fatalf("quota bars are still server-rendered; the JS renderer must be the single track: %s", html)
 	}
-	if got := strings.Count(html, `class="quota-fill warn"`); got != 2 {
-		t.Fatalf("orange quota bars = %d, want 2", got)
-	}
-	if got := strings.Count(html, `class="quota-fill "`); got != 2 {
-		t.Fatalf("green quota bars = %d, want 2", got)
+	for _, want := range []string{"quotaFillClass(windowData)", "windowData.exhausted||remaining<30?'danger':remaining<60?'warn':''"} {
+		if !strings.Contains(html, want) {
+			t.Fatalf("quota band logic missing %q: %s", want, html)
+		}
 	}
 }
 
@@ -1423,11 +1426,14 @@ func TestStatusPayloadAllowsMissingFiveHourWithLongWindow(t *testing.T) {
 		t.Fatalf("long_window = %#v, want visible", got.LongWindow)
 	}
 	html := string(RenderStatusHTML(payload))
-	if rows := strings.Count(html, `<div class="quota-row">`); rows != 1 {
-		t.Fatalf("server-rendered quota rows = %d, want only LongWindow", rows)
+	if strings.Contains(html, `{{range .Accounts}}`) {
+		t.Fatal("server still renders account cards; the JS renderer must be the single track")
 	}
-	if !strings.Contains(html, "if(account.five_hour&&!account.five_hour.missing)") {
+	if !strings.Contains(html, "if(account.five_hour&&!account.five_hour.missing)") || !strings.Contains(html, "addQuota(account.five_hour,'5 小时额度')") {
 		t.Fatal("dynamic account renderer lost missing FiveHour guard")
+	}
+	if !strings.Contains(html, "addQuota(account.long_window,account.long_window.label||'长额度')") {
+		t.Fatal("dynamic account renderer lost long window row")
 	}
 }
 
@@ -1471,10 +1477,13 @@ func TestStatusHTMLShowsRemainingQuotaLocalResetTimesAndCompactMetadata(t *testi
 		t.Fatalf("StatusCode = %d, want %d; body=%s", resp.StatusCode, http.StatusOK, resp.Body)
 	}
 	html := string(resp.Body)
-	for _, want := range []string{"剩余 75%", "剩余 60%", "5 小时重置", "长额度重置", "localTime", "data-time=\"2026-06-21T12:00:00Z\"", "主力号", "运营组", "账号备注内容", "分组备注内容"} {
+	for _, want := range []string{"display_text", "quota-remaining", "quotaResetTime", "time.dataset.time=windowData.reset_text", "formatLocalTimes()", "renderAccounts(STATUS.accounts||[])", "暂无账号数据。等待额度刷新后，这里会显示账号卡片。"} {
 		if !strings.Contains(html, want) {
-			t.Fatalf("html missing %q: %s", want, html)
+			t.Fatalf("html missing renderer marker %q: %s", want, html)
 		}
+	}
+	if strings.Contains(html, `{{range .Accounts}}`) {
+		t.Fatalf("server still renders account cards; the JS renderer must be the single track")
 	}
 }
 
