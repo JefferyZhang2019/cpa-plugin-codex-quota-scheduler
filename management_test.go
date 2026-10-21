@@ -718,7 +718,7 @@ func TestStatusHTMLUsesManagementAPIActionsModalProgressAndLogs(t *testing.T) {
 			t.Fatalf("html missing marker %q: %s", want, html)
 		}
 	}
-	for _, want := range []string{".quota-fill.warn{background:#f59e0b}", "quotaFillClass", "remaining<30?'danger':remaining<60?'warn':''"} {
+	for _, want := range []string{".quota-fill.warn{background:var(--c-quota-warn)}", "quotaFillClass", "remaining<30?'danger':remaining<60?'warn':''"} {
 		if !strings.Contains(html, want) {
 			t.Fatalf("html missing quota color marker %q: %s", want, html)
 		}
@@ -822,15 +822,19 @@ func TestStatusPageValidatesSchedulerPriorityBeforePatch(t *testing.T) {
 	}
 }
 
-func TestStatusPageUsesCollapsedSettingsAndNoHardReload(t *testing.T) {
+func TestStatusPageUsesPagedSettingsAndNoHardReload(t *testing.T) {
 	store := NewPluginState(DefaultConfig())
 	page := renderStatusPageForTest(t, store)
-	if !strings.Contains(page, `<details class="section collapsible" id="settingsPanel" hidden>`) &&
-		!strings.Contains(page, `<details class="panel collapsible" id="settingsPanel" hidden>`) {
-		t.Fatalf("page does not render settings as collapsed details")
+	if !strings.Contains(page, `<section class="page" data-page-section="settings" hidden>`) {
+		t.Fatalf("page does not render settings as a hidden hash-routed page")
 	}
-	if strings.Contains(page, `id="settingsPanel" open`) {
-		t.Fatalf("settings panel is open by default")
+	if !strings.Contains(page, `<div id="settingsPanel" class="panelBody" hidden>`) {
+		t.Fatalf("page does not keep the settings panel hidden until protected load")
+	}
+	for _, want := range []string{`data-page-section="overview"`, `data-page-section="logs"`, `data-page-section="retry"`, `showPage(currentPage())`, `navItem`} {
+		if !strings.Contains(page, want) {
+			t.Fatalf("page missing navigation marker %q", want)
+		}
 	}
 	if strings.Contains(page, "window.location.reload") {
 		t.Fatalf("page still contains hard reload")
@@ -839,7 +843,6 @@ func TestStatusPageUsesCollapsedSettingsAndNoHardReload(t *testing.T) {
 		t.Fatalf("page still contains scheduled hard reload helper")
 	}
 	for _, want := range []string{
-		`summary-toggle`,
 		`hasManagementKey`,
 		`requestManagement('/status'`,
 		`refreshStatus`,
