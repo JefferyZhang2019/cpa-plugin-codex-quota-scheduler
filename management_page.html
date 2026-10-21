@@ -1,0 +1,735 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<title>Codex 额度调度器</title>
+<style>
+/* ====================================================================
+   CODEX QUOTA SCHEDULER — DESIGN SYSTEM / SINGLE FILE / NO CDN
+   Style reference: image design directions, canonical screenshots from this HTML.
+   ==================================================================== */
+:root {
+  color-scheme: light;
+  --bg:#f5f7fb; --surface:#ffffff; --surface-subtle:#f8fafd; --sidebar:#111d30;
+  --sidebar-2:#172840; --sidebar-active:#214c8f; --sidebar-border:#2c3d56;
+  --ink:#17233a; --muted:#67758e; --subtle:#8c98aa; --line:#e2e8f1;
+  --primary:#2563eb; --primary-hover:#1d4ed8; --primary-wash:#eff5ff;
+  --success:#12a879; --success-wash:#e5f8f0;
+  --warning:#e39413; --warning-wash:#fff5e3;
+  --danger:#e44b59; --danger-wash:#fff0f1;
+  --neutral-wash:#eef2f7;
+  --radius-sm:7px; --radius-md:11px; --radius-lg:15px;
+  --shadow:0 2px 10px rgba(19,35,65,.035),0 1px 2px rgba(19,35,65,.025);
+  --shadow-raised:0 10px 40px rgba(13,28,49,.12);
+  --space-1:4px; --space-2:8px; --space-3:12px; --space-4:16px; --space-5:20px;
+  --space-6:24px; --space-8:32px; --space-10:40px;
+  --sidebar-w:240px; --motion:160ms ease;
+}
+@media (prefers-color-scheme: dark) {
+  /* Reserved dark-mode tokens. Activated by [data-theme="dark"] only. */
+  :root:not([data-theme]) {color-scheme:light}
+}
+:root[data-theme="dark"] {color-scheme:dark; --bg:#0d1422; --surface:#152034; --surface-subtle:#1b2940; --ink:#eff4ff; --muted:#a6b5ce; --subtle:#8194b3; --line:#304059; --primary-wash:#1c365d; --success-wash:#143f34; --warning-wash:#493b20; --danger-wash:#472b37; --neutral-wash:#25334b; --shadow:0 1px 3px rgba(0,0,0,.22)}
+*,*::before,*::after{box-sizing:border-box}
+html{scroll-behavior:smooth}
+body{margin:0;color:var(--ink);background:var(--bg);font:14px/1.55 -apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",Arial,sans-serif;-webkit-font-smoothing:antialiased}
+button,input,select,textarea{font:inherit}
+button{cursor:pointer}
+button:disabled{cursor:not-allowed;opacity:.5}
+button:focus-visible,a:focus-visible,input:focus-visible,select:focus-visible,textarea:focus-visible,summary:focus-visible{outline:3px solid rgba(37,99,235,.32);outline-offset:2px}
+a{color:inherit;text-decoration:none}
+svg{display:block;flex:none}
+code,.mono,.number{font-family:ui-monospace,SFMono-Regular,Consolas,"Liberation Mono",monospace;font-variant-numeric:tabular-nums}
+.app-shell{display:grid;grid-template-columns:var(--sidebar-w) minmax(0,1fr);min-height:100vh}
+.sidebar{position:sticky;top:0;display:flex;flex-direction:column;height:100vh;padding:23px 14px 17px;background:linear-gradient(168deg,#142239 5%,#101c2e 80%);color:#f3f7ff;z-index:5}
+.brand{display:flex;gap:11px;align-items:center;padding:4px 10px 24px;border-bottom:1px solid rgba(255,255,255,.07)}
+.brand-mark{display:grid;place-items:center;width:39px;height:39px;border-radius:12px;background:#285fef;box-shadow:0 5px 18px #1a57ed40}
+.brand-title{font-size:15px;font-weight:750;line-height:1.35;letter-spacing:-.15px;white-space:nowrap}
+.brand-subtitle{font-size:10px;color:#93a5c0;margin-top:2px;letter-spacing:.1px}
+.nav{display:grid;gap:5px;padding-top:22px}
+.nav-item{display:flex;align-items:center;gap:11px;border-radius:9px;padding:11px 13px;color:#b2c0d8;font-weight:600;font-size:13px;transition:background var(--motion),color var(--motion)}
+.nav-item:hover{color:#fff;background:#223752}
+.nav-item[aria-current="page"]{color:#fff;background:linear-gradient(90deg,#2458a9,#214783);box-shadow:inset 3px 0 #5597ff}
+.nav-item svg{opacity:.88}
+.sidebar-bottom{margin-top:auto;padding:18px 5px 0;border-top:1px solid var(--sidebar-border)}
+.sidebar-label{display:block;font-size:11px;color:#a5b3ca;margin:0 0 7px}
+.sidebar-select,.sidebar-input{display:block;width:100%;height:37px;background:#21334b;border:1px solid #3a4e67;border-radius:8px;color:#eef5ff;padding:0 11px;outline:none;min-width:0}
+.sidebar-select{margin-bottom:15px}.sidebar-input::placeholder{color:#879bb5}
+.sidebar-label.secret-label{margin-bottom:6px}
+.sidebar-help{display:flex;align-items:flex-start;gap:8px;font-size:10.5px;line-height:1.55;color:#a8bad3;margin:10px 0 14px}
+.sidebar-help svg{margin-top:2px}
+.remember{display:flex;align-items:flex-start;gap:8px;color:#d8e2f1;font-size:10.5px;line-height:1.5;cursor:pointer;margin:11px 0 14px}
+.remember input{margin:2px 0 0;accent-color:#3277ff}
+.sidebar-primary{display:flex;align-items:center;justify-content:center;gap:8px;width:100%;height:39px;background:var(--primary);border:1px solid #3a75f1;border-radius:8px;color:#fff;font-weight:700;transition:background var(--motion)}
+.sidebar-primary:hover{background:var(--primary-hover)}
+.sidebar-running{display:flex;align-items:flex-start;gap:8px;color:#9aacc4;font-size:11px;line-height:1.65;padding:17px 2px 1px}
+.sidebar-running svg{margin-top:2px}
+.workspace{width:100%;min-width:0;max-width:1750px;margin:0 auto;padding:29px 34px 54px}
+.page-header{display:flex;gap:18px;align-items:center;justify-content:space-between;margin-bottom:22px;min-height:53px}
+.page-header h1{font-size:25px;letter-spacing:-.7px;line-height:1.3;margin:0 0 4px;font-weight:780}
+.page-header p{color:var(--muted);margin:0;font-size:12.5px}
+.header-status{display:flex;align-items:center;gap:9px;white-space:nowrap;color:var(--muted);font-size:12px}
+.dot{display:inline-block;width:7px;height:7px;border-radius:50%;background:var(--success);box-shadow:0 0 0 3px var(--success-wash);margin-right:2px}
+.demo-tag{font-size:11px;font-weight:750;letter-spacing:.4px;background:#eaf2ff;color:#4168a8;border:1px solid #d2e3ff;border-radius:6px;padding:3px 7px}
+.panel{background:var(--surface);border:1px solid var(--line);border-radius:var(--radius-lg);box-shadow:var(--shadow)}
+.panel-title{display:flex;align-items:flex-start;justify-content:space-between;gap:16px;margin-bottom:17px}
+.panel-title h2{font-size:15px;line-height:1.3;font-weight:750;margin:0 0 5px}
+.panel-title p{color:var(--muted);font-size:12px;line-height:1.55;margin:0}
+.btn{display:inline-flex;align-items:center;justify-content:center;gap:7px;white-space:nowrap;min-height:35px;padding:7px 12px;border:1px solid var(--line);border-radius:8px;background:var(--surface);color:var(--ink);font-size:12px;font-weight:650;transition:background var(--motion),border-color var(--motion),transform var(--motion)}
+.btn:hover{background:var(--surface-subtle);border-color:#b9c9e0}
+.btn:active{transform:translateY(1px)}
+.btn-primary{background:var(--primary);border-color:var(--primary);color:#fff}
+.btn-primary:hover{background:var(--primary-hover);border-color:var(--primary-hover)}
+.btn-danger{color:var(--danger);border-color:#ffcbd1}.btn-danger:hover{background:var(--danger-wash)}
+.btn-subtle{background:var(--surface-subtle)}
+.btn-sm{min-height:29px;font-size:11px;padding:5px 9px;border-radius:7px}
+.btn-icon{padding:5px;min-width:29px}
+.toolbar{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap}
+.toolbar-actions{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.pill{display:inline-flex;align-items:center;gap:4px;max-width:100%;border-radius:6px;font-size:10.5px;line-height:1.5;font-weight:700;padding:2px 7px;white-space:nowrap}
+.pill-blue{background:var(--primary-wash);color:#2264db}.pill-green{background:var(--success-wash);color:#09865f}
+.pill-amber{background:var(--warning-wash);color:#b27208}.pill-red{background:var(--danger-wash);color:#cf3d50}
+.pill-grey{background:var(--neutral-wash);color:var(--muted)}
+.pill-outline{border:1px solid #bfd4ff;background:var(--surface);color:var(--primary)}
+.badge-row{display:flex;gap:6px;align-items:center;flex-wrap:wrap;min-height:21px}
+.metrics{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:16px;margin:0 0 23px}
+.metric{display:flex;gap:14px;align-items:center;min-height:99px;padding:18px 19px}
+.metric-icon{display:grid;place-items:center;width:43px;height:43px;border-radius:11px;color:#276beb;background:#eaf2ff}
+.metric:nth-child(2) .metric-icon{color:#8a57ea;background:#f3edff}
+.metric:nth-child(3) .metric-icon{color:#139eae;background:#e5f8fa}
+.metric-label{color:var(--muted);font-size:11px;margin-bottom:6px}
+.metric-value{font-weight:780;font-size:17px;line-height:1.3;letter-spacing:-.4px;overflow-wrap:anywhere}
+.metric-hint{font-size:10.5px;color:var(--subtle);margin-top:4px}
+.section-heading{display:flex;gap:12px;align-items:center;justify-content:space-between;margin:0 0 14px}
+.section-heading h2{font-size:15px;margin:0;font-weight:760}.section-heading span{color:var(--muted);font-size:12px}
+.accounts-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:16px;align-items:stretch}
+.account-card{position:relative;display:flex;flex-direction:column;min-width:0;padding:17px 17px 13px;overflow:hidden;transition:border-color var(--motion),box-shadow var(--motion)}
+.account-card:hover{box-shadow:0 7px 30px rgba(31,59,99,.075)}
+.account-card.is-next{border-color:#538cf9;box-shadow:0 0 0 1px #d0e2ff,inset 0 0 0 .5px #a3c4ff}
+.account-card.is-pinned:not(.is-next){border-color:#b5cffc}
+.account-card.is-unavailable{background:linear-gradient(180deg,var(--surface) 75%,var(--surface-subtle));}
+.account-top{display:flex;gap:11px;align-items:flex-start;margin-bottom:9px}
+.account-avatar{width:36px;height:36px;display:grid;place-items:center;border-radius:11px;background:#eaf2ff;color:#2563eb}
+.account-avatar.green{background:#dff6ef;color:#0a9d73}.account-avatar.orange{background:#fff2df;color:#d68800}
+.account-avatar.red{background:#fff0f1;color:#d83c4d}.account-avatar.purple{background:#f0ecff;color:#7c56cf}
+.account-id-block{flex:1;min-width:0}
+.account-name{font-size:14px;font-weight:760;line-height:1.4;margin:0 0 3px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.account-id{font-size:10.5px;color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.rank{background:var(--neutral-wash);font-family:ui-monospace,Consolas,monospace;padding:5px 7px;border-radius:6px;color:var(--muted);font-size:11px;font-weight:700}
+.account-card.is-next .rank{background:var(--primary-wash);color:var(--primary)}
+.attr-line{display:flex;align-items:center;gap:5px;flex-wrap:wrap;margin-bottom:9px}
+.tech-line{display:flex;gap:11px;flex-wrap:wrap;font-size:10.5px;color:var(--muted);padding-bottom:10px;border-bottom:1px solid var(--line);margin-bottom:11px}
+.tech-line strong{color:var(--ink);font-weight:700}
+.account-card .badge-row{margin-bottom:14px}
+.quota-row{margin-bottom:12px}
+.quota-labels{display:grid;grid-template-columns:minmax(0,1fr) auto auto;gap:8px;align-items:baseline;margin-bottom:6px;font-size:11px}
+.quota-labels .qname{font-weight:700}.quota-labels .qpercent{font-weight:800;font-variant-numeric:tabular-nums}
+.quota-labels .qreset{color:var(--muted);font-size:10px}
+.progress{height:7px;border-radius:99px;background:var(--neutral-wash);overflow:hidden}
+.progress>span{display:block;height:100%;border-radius:inherit;background:var(--success);transition:width 300ms ease}
+.progress>span.amber{background:var(--warning)}.progress>span.red{background:var(--danger)}.progress>span.missing{background:#cbd3df;width:100%!important;opacity:.55}
+.account-meta{margin-top:auto;border-top:1px solid var(--line);padding-top:10px;display:flex;flex-direction:column;gap:4px;color:var(--muted);font-size:10.7px;line-height:1.55}
+.account-notes{margin:9px 0 0;border-left:2px solid #d5e3f8;padding:6px 8px;background:var(--surface-subtle);border-radius:0 6px 6px 0;font-size:10.8px;color:var(--muted);overflow-wrap:anywhere}
+.card-actions{display:grid;grid-template-columns:1.05fr 1.2fr .8fr;gap:6px;margin-top:12px}
+.card-actions .btn{min-width:0;padding:5px 4px;font-size:10.8px}
+.card-actions .btn svg{width:13px;height:13px}
+.banner{display:flex;gap:11px;align-items:flex-start;border:1px solid #f1d48c;background:var(--warning-wash);border-radius:11px;padding:13px 15px;margin-bottom:17px;color:#9b670c;font-size:12px}
+.banner strong{display:block;font-size:12px;margin-bottom:3px}.banner p{margin:0;line-height:1.6;color:#986f22}.banner.blue{border-color:#cbdffb;background:var(--primary-wash);color:#235bb6}.banner.blue p{color:#4d6eaa}
+.filters{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+.filter{border:1px solid var(--line);background:var(--surface);border-radius:8px;padding:7px 11px;display:inline-flex;gap:8px;align-items:center;font-size:12px;color:var(--muted);font-weight:650}
+.filter.is-active{background:var(--primary);color:#fff;border-color:var(--primary)}
+.filter .count{background:var(--neutral-wash);padding:1px 6px;border-radius:5px;font-size:10px;color:var(--muted)}
+.filter.is-active .count{background:#ffffff3a;color:#fff}
+.logs-toolbar{margin-bottom:16px}
+.log-table-wrap{overflow:auto;max-width:100%}
+.data-table{width:100%;border-collapse:collapse;table-layout:fixed;font-size:12px}
+.data-table th{text-align:left;background:var(--surface-subtle);color:var(--muted);font-size:11px;font-weight:700;padding:12px 14px;border-bottom:1px solid var(--line)}
+.data-table td{border-bottom:1px solid var(--line);padding:13px 14px;vertical-align:top;color:var(--ink);overflow-wrap:anywhere}
+.data-table tbody tr:last-child td{border-bottom:none}.data-table tbody tr:hover{background:var(--surface-subtle)}
+.log-event{font-weight:650;font-size:11.5px;color:#2f4668}.data-table .muted-cell{color:var(--muted);font-size:11px}
+.data-table .fields{color:var(--muted);font-size:10.5px;line-height:1.8}
+.table-footer{display:flex;justify-content:space-between;align-items:center;padding:13px 16px;border-top:1px solid var(--line);font-size:11px;color:var(--muted)}
+.settings-note{margin-bottom:18px}
+.settings-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));align-items:start;gap:16px}
+.settings-col{display:grid;align-content:start;gap:16px;min-width:0}
+.settings-panel{overflow:hidden}
+.group-header{display:flex;gap:11px;align-items:flex-start;padding:17px 19px;border-bottom:1px solid var(--line)}
+.group-icon{display:grid;place-items:center;width:33px;height:33px;border-radius:9px;background:var(--primary-wash);color:var(--primary)}
+.group-icon.warn{background:var(--warning-wash);color:#c78612}
+.group-icon.green{background:var(--success-wash);color:var(--success)}
+.group-title{font-size:14px;font-weight:770;margin:0 0 2px}.group-desc{margin:0;color:var(--muted);font-size:11.4px;line-height:1.55}
+.setting-row{display:grid;grid-template-columns:minmax(0,1fr) minmax(153px,33%);column-gap:12px;align-items:center;padding:12px 19px;border-bottom:1px solid var(--line);min-height:67px}
+.setting-row:last-of-type{border-bottom:none}
+.setting-name{font-weight:720;font-size:12px;line-height:1.4;display:block;margin-bottom:4px}
+.setting-help{font-size:10.6px;line-height:1.65;color:var(--muted)}
+.setting-control{display:flex;justify-content:flex-end;align-items:center;gap:7px;min-width:0}
+.setting-row.radio-setting{grid-template-columns:1fr;gap:8px}
+.setting-row.radio-setting .setting-control{justify-content:flex-start;flex-wrap:wrap}
+.radio-label{display:inline-flex;align-items:center;gap:6px;cursor:pointer;font-size:11.5px}
+.radio-label input{accent-color:var(--primary);margin:0}
+.switch{position:relative;display:inline-flex;align-items:center;justify-content:flex-start;width:38px;height:22px;padding:2px;cursor:pointer;flex:none}
+.switch input{position:absolute;opacity:0;width:100%;height:100%;margin:0;cursor:pointer;z-index:2}
+.switch-track{position:relative;display:block;width:38px;height:21px;border-radius:20px;background:#ccd5e2;transition:background var(--motion)}
+.switch-track::after{content:"";position:absolute;top:3px;left:3px;width:15px;height:15px;background:#fff;border-radius:50%;box-shadow:0 1px 3px #0c1d3330;transition:transform var(--motion)}
+.switch input:checked+.switch-track{background:var(--primary)}
+.switch input:checked+.switch-track::after{transform:translateX(17px)}
+.switch input:focus-visible+.switch-track{outline:3px solid #a8c6ff;outline-offset:2px}
+.input,.select,.textarea{width:100%;min-width:0;min-height:34px;background:var(--surface);border:1px solid #ced8e6;border-radius:7px;color:var(--ink);padding:7px 10px;font-size:12px}
+.input:focus,.select:focus,.textarea:focus{outline:2px solid #bad2ff;outline-offset:0;border-color:var(--primary)}
+.textarea{resize:vertical;min-height:78px}.input.narrow{max-width:90px}
+.unit-control{display:flex;width:100%;min-width:0;max-width:214px}
+.unit-control input{border-radius:7px 0 0 7px;width:45%;min-width:0}
+.unit-control select{border-radius:0 7px 7px 0;border-left:none;width:55%;padding-left:6px}
+.settings-footnote{padding:12px 18px;border-top:1px solid #f3d597;background:var(--warning-wash);font-size:11px;color:#93640b}
+.settings-savebar{position:relative;bottom:auto;z-index:1;display:flex;justify-content:space-between;gap:12px;align-items:center;padding:13px 17px;margin-top:18px;border-radius:12px;background:var(--surface);border:1px solid var(--line);box-shadow:var(--shadow)}
+.dirty-label{font-size:11px;color:var(--muted)}
+.dirty-label strong{color:#b47809}
+.retry-top{padding:19px;margin-bottom:17px}
+.retry-top-inner{display:flex;gap:22px;align-items:flex-start;justify-content:space-between}
+.retry-top p{margin:10px 0 0;color:var(--muted);font-size:11.8px;line-height:1.8}
+.segmented{display:inline-flex;padding:3px;background:var(--neutral-wash);border-radius:10px;gap:3px}
+.segmented button{min-width:68px;border:0;background:transparent;padding:8px 13px;border-radius:8px;color:var(--muted);font-size:12px;font-weight:700}
+.segmented button[aria-pressed="true"]{background:var(--primary);color:#fff;box-shadow:0 2px 6px rgba(34,90,207,.18)}
+.retry-stack{display:grid;gap:17px}
+.content-panel{padding:18px 19px}
+.chains{display:grid;gap:12px}
+.chain-card{display:grid;grid-template-columns:minmax(148px,.92fr) 26px minmax(0,2.3fr) auto;align-items:start;gap:12px;border:1px solid var(--line);border-radius:11px;background:var(--surface-subtle);padding:13px}
+.chain-origin-label{font-size:10.5px;color:var(--muted);margin-bottom:6px;font-weight:700}
+.chain-arrow{display:flex;justify-content:center;align-items:center;color:#9aa8ba;padding-top:32px}
+.chain-origin .input{font-weight:720}
+.target-list{display:grid;gap:7px}
+.target-item{display:grid;grid-template-columns:24px minmax(69px,.74fr) minmax(100px,1.3fr) 28px 28px 28px;gap:5px;align-items:center}
+.target-index{text-align:center;color:var(--muted);font-size:10px;font-weight:700}
+.target-item .input{font-size:11.2px;padding:6px 7px}
+.chain-tools{display:flex;flex-direction:column;gap:5px}
+.chain-footer{padding-top:9px}
+.chain-actions{display:flex;gap:9px;margin-top:15px;flex-wrap:wrap}
+.preflight-status{display:flex;gap:11px;align-items:flex-start;background:var(--warning-wash);border:1px solid #f3dfab;border-radius:9px;padding:12px;margin-top:6px;color:#986c10}
+.preflight-status.good{background:var(--success-wash);border-color:#c2e9da;color:#087f5b}
+.preflight-status strong{font-size:12.5px}.preflight-status p{font-size:11.5px;margin:4px 0 0;line-height:1.55}
+.confirmation{margin-top:13px;padding:15px;border-radius:10px;border:1px solid #f1d19b;background:var(--surface-subtle)}
+.confirmation h3{margin:0 0 8px;font-size:13px}
+.diff-table{width:100%;border-collapse:collapse;font-size:11.5px;margin:8px 0 14px}
+.diff-table td,.diff-table th{padding:8px;text-align:left;border-bottom:1px solid var(--line)}
+.diff-bad{color:var(--danger);font-weight:750}.diff-good{color:var(--success);font-weight:750}
+.advanced{overflow:hidden}
+.advanced>summary{display:flex;align-items:center;justify-content:space-between;gap:12px;cursor:pointer;list-style:none;padding:17px 19px;font-weight:750;font-size:13px}
+.advanced>summary::-webkit-details-marker{display:none}
+.advanced-summary{color:var(--muted);font-size:11px;font-weight:450;line-height:1.5}
+.advanced[open]>summary{border-bottom:1px solid var(--line)}
+.advanced-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));padding:7px 5px 5px}
+.advanced-grid .setting-row{border:none;grid-template-columns:1fr;gap:7px;min-height:0}
+.advanced-grid .setting-control{justify-content:flex-start}
+.advanced-grid .setting-control>.input{max-width:220px}
+.retry-metrics{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:10px;margin-top:13px}
+.retry-metric{border:1px solid var(--line);border-radius:9px;padding:13px 12px;min-width:0}
+.retry-metric .value{font-weight:780;font-size:20px;margin:4px 0 0;line-height:1.25;overflow:hidden;text-overflow:ellipsis}
+.retry-metric .caption{font-size:10.5px;color:var(--muted)}
+.retry-events{display:grid;gap:8px;margin-top:12px}
+.retry-event{display:grid;grid-template-columns:124px 175px 1fr;gap:10px;padding:11px;background:var(--surface-subtle);border:1px solid var(--line);border-radius:8px;font-size:11px}
+.empty{padding:45px 20px;text-align:center;color:var(--muted)}
+.empty h3{font-size:15px;color:var(--ink);margin:12px 0 5px}.empty p{margin:0;font-size:12px}
+.empty-icon{width:45px;height:45px;background:var(--primary-wash);color:var(--primary);border-radius:13px;margin:auto;display:grid;place-items:center}
+.not-loaded{height:min(60vh,470px);display:flex;align-items:center;justify-content:center}
+.toast-area{position:fixed;top:21px;right:25px;z-index:30;display:grid;gap:9px;max-width:min(410px,calc(100vw - 32px));pointer-events:none}
+.toast{display:flex;align-items:flex-start;gap:9px;min-width:260px;padding:12px 14px;box-shadow:var(--shadow-raised);background:var(--surface);border:1px solid #bce5d0;border-left:3px solid var(--success);border-radius:10px;color:var(--ink);font-size:12px;pointer-events:auto;animation:toast-in .2s ease}
+.toast.error{border-color:#f9c2ca;border-left-color:var(--danger)}
+.toast>div{flex:1}.toast small{color:var(--muted);display:block;margin-top:3px}.toast button{border:0;background:none;color:var(--muted);padding:2px}
+@keyframes toast-in{from{opacity:0;transform:translateY(-8px)}to{opacity:1;transform:translateY(0)}}
+.modal{width:min(600px,calc(100vw - 30px));max-height:calc(100vh - 40px);border:1px solid var(--line);border-radius:15px;padding:0;background:var(--surface);color:var(--ink);box-shadow:var(--shadow-raised)}
+.modal::backdrop{background:rgba(12,24,42,.62);backdrop-filter:blur(3px)}
+.modal-header{display:flex;align-items:center;justify-content:space-between;padding:18px 22px;border-bottom:1px solid var(--line)}
+.modal-header h2{margin:0;font-size:17px}.modal-header small{color:var(--muted)}
+.modal-body{padding:19px 22px;overflow:auto;max-height:65vh}
+.modal-form-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px}
+.form-field{display:grid;gap:6px;font-weight:700;font-size:11.5px}
+.form-field span{font-weight:400;font-size:10.8px;color:var(--muted)}
+.form-field.full{grid-column:1/-1}
+.modal-footer{padding:14px 22px;border-top:1px solid var(--line);display:flex;gap:9px;justify-content:flex-end}
+.hidden{display:none!important}
+@media(max-width:1399px){.accounts-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.setting-row{grid-template-columns:minmax(0,1fr) minmax(120px,32%)}.settings-grid{grid-template-columns:1fr 1fr}.retry-metrics{grid-template-columns:repeat(3,minmax(0,1fr))}}
+@media(max-width:1130px){.settings-grid{grid-template-columns:1fr}.chain-card{grid-template-columns:1fr 18px 1.8fr auto}.workspace{padding-left:24px;padding-right:24px}.data-table{min-width:800px}}
+@media(max-width:859px){
+  .app-shell{display:block}.sidebar{position:relative;top:auto;height:auto;padding:12px 14px;background:#142239}
+  .brand{padding:2px 4px 10px;border:0}.brand-mark{width:32px;height:32px}.brand-title{font-size:13px}.brand-subtitle{display:none}
+  .nav{display:flex;overflow-x:auto;gap:5px;padding:4px 0 10px}.nav-item{flex:none;font-size:11.5px;gap:6px;padding:7px 10px}.nav-item svg{width:14px;height:14px}
+  .sidebar-bottom{margin-top:0;display:grid;grid-template-columns:1fr auto;gap:6px 12px;align-items:end;padding:8px 0 0}
+  .sidebar-label,.secret-label,.sidebar-running,.sidebar-help{display:none}
+  .sidebar-select{grid-column:1;max-width:240px;margin:0;height:32px;font-size:11px}
+  .sidebar-input{grid-column:1;height:32px;max-width:240px;font-size:11px}
+  .sidebar-primary{grid-column:2;grid-row:1/3;height:32px;font-size:11px}
+  .remember{display:flex;grid-column:1/-1;grid-row:3;margin:2px 0;color:#c4d2e5;font-size:10px}
+  .sidebar-help{display:flex;grid-column:1/-1;grid-row:4;margin:0;color:#95a8c2;font-size:9px}
+  .workspace{padding:20px 16px 30px}.page-header{margin-bottom:16px}.page-header h1{font-size:21px}
+  .metrics{grid-template-columns:repeat(3,minmax(0,1fr));gap:8px;margin-bottom:18px}.metric{padding:12px;min-height:80px;gap:7px}.metric-icon{width:28px;height:28px}.metric-icon svg{width:16px;height:16px}.metric-value{font-size:12.5px}.metric-label{font-size:10px}.metric-hint{font-size:9px}
+  .accounts-grid{grid-template-columns:repeat(2,minmax(0,1fr));gap:11px}
+  .settings-grid{grid-template-columns:1fr}.chain-card{grid-template-columns:1fr}.chain-arrow{display:none}.retry-top-inner{display:block}.segmented{margin-top:13px}
+}
+@media(max-width:620px){.accounts-grid,.metrics{grid-template-columns:1fr}.metrics{gap:9px}.metric{min-height:68px}.page-header{align-items:flex-start}.header-status{font-size:10px}.header-status .demo-tag{display:none}.setting-row{grid-template-columns:1fr;gap:9px}.setting-control{justify-content:flex-start}.retry-metrics{grid-template-columns:repeat(2,minmax(0,1fr))}.advanced-grid{grid-template-columns:1fr}.retry-event{grid-template-columns:1fr}.modal-form-grid{grid-template-columns:1fr}.toolbar{align-items:flex-start}.settings-savebar{flex-direction:column;align-items:stretch}.settings-savebar .toolbar-actions{justify-content:flex-end}}
+@media(prefers-reduced-motion:reduce){html{scroll-behavior:auto}*,*::before,*::after{animation-duration:.01ms!important;transition-duration:.01ms!important}}
+
+</style>
+</head>
+<body>
+<div id="app"></div>
+<div id="toastArea" class="toast-area" aria-live="polite" aria-atomic="false"></div>
+<dialog id="editDialog" class="modal" aria-labelledby="editDialogTitle"></dialog>
+<input id="importFile" class="hidden" type="file" accept="application/json,.json">
+<script>
+'use strict';
+/* Codex Quota Scheduler management UI.
+   Visual system and render layer: codex-ui-handoff prototype (design team),
+   adapted to the live v4 management API. API layer, authorization, polling,
+   and save isolation semantics are carried over from the previous revision. */
+let STATUS={{json .}};
+const MANAGEMENT_BASE='/v0/management/plugins/codex-quota-scheduler';
+const LOCALE_STORAGE_KEY='codex-quota-scheduler-locale-v1';
+const MANAGEMENT_KEY_STORAGE_KEY='codex-quota-scheduler-management-key-v1';
+const storage=(()=>{try{const s=window.localStorage;s.getItem('__test__');return s;}catch(error){const cache=new Map();return {getItem:k=>cache.get(k)||null,setItem:(k,v)=>cache.set(k,String(v)),removeItem:k=>cache.delete(k)};}})();
+const esc=v=>String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const E=esc;
+const clone=o=>JSON.parse(JSON.stringify(o));
+function tr(zh,en){return state.lang==='en'?(en??zh):zh;}
+function t(key){const dict=TRANSLATIONS[state.lang]||TRANSLATIONS.en;return dict[key]||TRANSLATIONS.en[key]||key;}
+const icons={
+  grid:'<rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/>',
+  logs:'<path d="M5 4h14v16H5z"/><path d="M8 8h8M8 12h8M8 16h5"/>',
+  settings:'<path d="M12 3v3m0 12v3M3 12h3m12 0h3M5.6 5.6l2.1 2.1m8.6 8.6 2.1 2.1M18.4 5.6l-2.1 2.1M7.7 16.3l-2.1 2.1"/><circle cx="12" cy="12" r="4"/>',
+  retry:'<path d="M19 7v5h-5M5 17v-5h5"/><path d="M6.5 9A6 6 0 0 1 17.4 7L19 12M5 12l1.7 5A6 6 0 0 0 17.5 15"/>',
+  refresh:'<path d="M20 7v5h-5M4 17v-5h5"/><path d="M6.2 9A7 7 0 0 1 18.3 7L20 12M4 12l1.7 5A7 7 0 0 0 17.8 15"/>',
+  download:'<path d="M12 3v12m-4-4 4 4 4-4M4 17v3h16v-3"/>',
+  upload:'<path d="M12 21V9m-4 4 4-4 4 4M4 7V4h16v3"/>',
+  pin:'<path d="m16 3 5 5-3 1-3 4v4l-2 2-4-5-4-4-2-2 2-2h4l4-3zM3 21l7-7"/>',
+  edit:'<path d="m4 17 1-5L17 2l5 5-12 12-6 1v-3zM14 5l5 5"/>',
+  close:'<path d="M5 5l14 14M19 5 5 19"/>',
+  plus:'<path d="M12 4v16M4 12h16"/>',
+  up:'<path d="m6 15 6-6 6 6"/>',
+  down:'<path d="m6 9 6 6 6-6"/>',
+  check:'<path d="m4 12 5 5L20 6"/>',
+  alert:'<path d="M12 3 2 21h20L12 3zM12 9v5m0 3v.1"/>',
+  info:'<circle cx="12" cy="12" r="9"/><path d="M12 11v5m0-8v.1"/>',
+  calendar:'<rect x="3" y="5" width="18" height="16" rx="2"/><path d="M7 3v4m10-4v4M3 10h18M8 14h4"/>',
+  clock:'<circle cx="12" cy="12" r="9"/><path d="M12 6v7l5 3"/>',
+  activity:'<path d="M4 16h4l3-10 3 13 3-7h3"/>',
+  user:'<circle cx="12" cy="7" r="4"/><path d="M4 21v-2a8 8 0 0 1 16 0v2"/>',
+  users:'<circle cx="9" cy="8" r="3"/><path d="M2 20v-2a7 7 0 0 1 14 0v2M16 6a3 3 0 0 1 0 6m1 2c3 1 5 3 5 6"/>',
+  shield:'<path d="m12 2 8 4v6c0 5-3 8-8 10C7 20 4 17 4 12V6z"/><path d="m8 12 3 3 5-6"/>',
+  lock:'<rect x="4" y="10" width="16" height="11" rx="2"/><path d="M8 10V7a4 4 0 0 1 8 0v3"/>',
+  bolt:'<path d="m14 2-9 12h7l-2 8 9-12h-7z"/>',
+  file:'<path d="M6 3h8l5 5v13H6zM14 3v5h5M9 13h7M9 17h7"/>',
+  chevron:'<path d="m6 9 6 6 6-6"/>',
+  arrow:'<path d="M4 12h16m-6-6 6 6-6 6"/>',
+  tag:'<path d="M4 4h9l8 8-9 9-8-8z"/><circle cx="9" cy="9" r="1"/>',
+  globe:'<circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3c6 6 6 12 0 18M12 3c-6 6-6 12 0 18"/>',
+  copy:'<rect x="8" y="7" width="13" height="14" rx="2"/><path d="M16 7V4H5v13h3"/>',
+  trash:'<path d="M4 7h16M10 7V4h4v3m-8 0 1 14h10l1-14M10 11v6m4-6v6"/>',
+  help:'<circle cx="12" cy="12" r="9"/><path d="M9 9a3 3 0 0 1 6 1c0 2-3 2-3 4m0 3v.1"/>'
+};
+function ic(name,size=17){return `<svg width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.85" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${icons[name]||icons.info}</svg>`;}
+const pill=(label,color='grey')=>`<span class="pill pill-${color}">${E(label)}</span>`;
+const button=(action,label,kind='',extra='')=>`<button type="button" class="btn ${kind}" data-action="${action}" ${extra}>${label}</button>`;
+const TRANSLATIONS={en:{'log.circuit.success':'Successful request updated the circuit state','log.credential.external_login_unparked':'Re-login detected; auth-failure park cleared and a verification refresh was triggered','log.probe.activation_sent':'Tiny activation request sent','log.probe.failed':'Quota-window probe failed and was handled safely','log.probe.precheck_started':'Checking a suspected lazy quota window','log.probe.verified':'Quota-window activation verified','log.quota.core_cooldown_reset':'Verified recovery also cleared the CPA core cooldown','log.quota.core_cooldown_reset_unavailable':'This CPA version cannot clear the core cooldown; only the plugin-side recovery applied','log.quota.manual_refresh_override':'Manual refresh overrode the host-side disabled/unavailable flag','log.quota.refresh_failed':'Account quota refresh failed','log.quota.refresh_one_failed':'Single-account quota refresh failed','log.quota.refresh_one_requested':'Single-account quota refresh requested','log.quota.refresh_requested':'Background quota refresh requested','log.quota.refresh_success':'Account quota refreshed successfully','log.quota.temporary_exhausted':'Account quota exhausted; waiting for reset','log.quota.temporary_recovered':'Manual refresh verified recovery; temporary exhaustion cleared','log.retry.aborted':'Retry stopped because the upstream failure was not retryable','log.retry.attempt_started':'Retry chain attempt started','log.retry.exhausted':'Retry chain exhausted; returning the last failure','log.retry.retry_scheduled':'Retry scheduled after a retryable upstream failure','log.retry.shadow_would_retry':'Shadow mode: this request would have been retried','log.scheduler.fallback':'Plugin delegated to the built-in scheduler','log.scheduler.handled':'Plugin handled the request without selecting an account','log.scheduler.selected':'Request handled by plugin','log.scheduler.unhandled':'Request was not handled by the plugin','log.ui.account_saved':'UI saved account card','log.ui.config_exported':'UI exported plugin configuration','log.ui.config_imported':'UI imported plugin configuration','log.ui.group_saved':'UI saved account group','log.ui.refresh_one_requested':'UI requested one account quota refresh','log.ui.refresh_requested':'UI requested quota refresh','log.ui.settings_saved':'UI saved scheduler settings'},'zh-CN':{}}
+const INLINE_TRANSLATIONS=[
+  ['下一优先','Next preferred'],['可用','Available'],['未知类型','unknown type'],['CPA 优先级','CPA priority'],['插件优先级','Plugin priority'],['熔断：','Circuit: '],['熔断','Circuit'],['全开','closed'],['半开','half-open'],
+  ['按到期时间','by expiry time'],['优先使用','prefer Monthly'],['已启用','enabled'],['已关闭','disabled'],['暂无数据','No data'],['暂无','None'],['已用完','Used up'],
+  ['5 小时额度','5-hour quota'],['周额度','Weekly quota'],['月额度','Monthly quota'],['剩余 ','Remaining '],['5 小时重置：','5-hour reset: '],['长额度重置：','Long quota reset: '],
+  ['缓存时间','Cache age'],['额度来源','Quota source'],['响应观测','Response observation'],['轮询刷新','Polled refresh'],['托管停用','Managed disable'],['已停用，恢复中','disabled, recovering'],['检查额度中','checking quota'],['熔断计数','Circuit counts'],['失败','Failures'],['成功','Successes'],['主动重置','Reset credits'],['调度状态','Scheduler state'],[' 次',' times'],['累计','total'],['有效期','expires'],
+  ['刷新额度','Refresh Quota'],['编辑','Edit'],['请重新登录','Please re-login'],['不可用','Unavailable'],['最后错误','Last error'],['下次重试','Next retry'],['长额度','Long quota'],[' 重置：',' reset: '],['Monthly：','Monthly: '],['调度：','Scheduler: '],['下一账号：','Next account: '],['最近选择：','Last selected: '],
+  ['最近一次扫描认证文件中没有 Codex 账号，请先进行 OS 登录，然后发送一次 Codex 请求或手动刷新额度。','The most recent auth-file scan found no Codex accounts. Please sign in through OS login, then send a Codex request or refresh quota manually.'],
+  [' 内没有观察到 Codex 请求，系统暂不主动扫描账号。','; the system will not actively scan accounts. '],['发送第一次 Codex 请求后将自动获取账号额度信息。','Send the first Codex request to fetch account quota automatically.'],
+  [' 内没有 Codex 请求，调度器已暂停后台刷新。',' without a Codex request, so background refresh is paused. '],['发送一次 Codex 请求后会重新进入活跃窗口并获取账号额度信息。','Send one Codex request to re-enter the active window and fetch account quota.'],
+  ['已观察到 Codex 请求，调度器处于活跃窗口。','A Codex request was observed and the scheduler is in its active window. '],['账号额度刷新完成后，这里会显示账号卡片。','Account cards will appear here after quota refresh finishes.'],['等待额度刷新后，这里会显示账号卡片。','Account cards will appear here after quota refresh.'],
+  ['未发现 Codex 账号','No Codex accounts were found'],['最近一次扫描认证文件中没有 Codex 账号','The most recent auth-file scan found no Codex accounts'],['请先进行 OS 登录','please sign in through OS login'],['然后发送一次 Codex 请求或手动刷新额度','then send a Codex request or refresh quota manually'],
+  ['账号额度已过期或待刷新，但最近 ','Quota data is stale or pending refresh, but no Codex requests were seen in the last '],[' 内没有 Codex 请求，调度器处于休眠状态。','; the scheduler is sleeping. '],['发送一次 Codex 请求后会获取账号额度信息。','Send one Codex request to fetch account quota.'],
+  ['调度器处于休眠状态','The scheduler is sleeping'],['最近 ','No Codex requests were observed in the last '],[' 内没有观察到 Codex 请求',''],['系统暂不主动扫描账号','the system will not actively scan accounts'],['发送第一次 Codex 请求后将自动获取账号额度信息','Send the first Codex request to fetch account quota automatically'],
+  ['内没有 Codex 请求，调度器已暂停后台刷新',' without a Codex request, so background refresh is paused'],['发送一次 Codex 请求后会重新进入活跃窗口并获取账号额度信息','Send one Codex request to re-enter the active window and fetch account quota'],
+  ['等待账号额度数据','Waiting for account quota data'],['已观察到 Codex 请求，调度器处于活跃窗口','A Codex request was observed and the scheduler is in its active window'],['账号额度刷新完成后，这里会显示账号卡片','Account cards will appear here after quota refresh finishes'],['等待额度刷新后，这里会显示账号卡片','Account cards will appear here after quota refresh'],
+  ['认证信息异常，请重新登录。','Authentication looks invalid. Please re-login.'],['上次额度刷新失败，调度器正在等待下次自动重试。','The last quota refresh failed. The scheduler is waiting for the next automatic retry.'],
+  ['账号额度已过期，调度器处于活跃窗口，将按刷新队列更新。','Quota data is stale. The scheduler is active and will update it through the refresh queue.'],['账号尚未获取额度信息，调度器处于活跃窗口，将按刷新队列更新。','Quota has not been fetched yet. The scheduler is active and will update it through the refresh queue.'],
+  ['上次额度刷新失败，当前已到重试时间。','The last quota refresh failed, and retry is due now.'],['额度重置时间已到，调度器将按刷新队列更新。','Quota reset time has arrived; the scheduler will update it through the refresh queue.'],
+  ['账号处于熔断等待中，半开探测时间到达后会重试。','The account is in circuit wait and will retry after the half-open probe time.'],['本地认证信息缺失或格式异常，请检查登录状态。','Local auth data is missing or malformed. Please check sign-in state.'],
+  ['填写 CPA 管理密钥后将动态加载账号队列、调度日志和当前调度状态','Enter the CPA management key to dynamically load the account queue, scheduler logs, and current scheduler state'],['发送 Codex 请求后，调度器会在活跃窗口内刷新额度','After a Codex request, the scheduler refreshes quota within the active window']
+];
+const SORTED_INLINE_TRANSLATIONS=[...INLINE_TRANSLATIONS].sort((left,right)=>right[0].length-left[0].length);
+function translateInlineText(text){if(!text)return text;for(const pair of SORTED_INLINE_TRANSLATIONS){if(text===pair[0])return pair[1];else if(text.startsWith(pair[0]))return pair[1]+text.slice(pair[0].length)}return text}
+function localizedLogMessage(log){const key='log.'+(log.event||'');if(TRANSLATIONS.en[key])return TRANSLATIONS.en[key];if(state.lang==='zh-CN')return log.message||TRANSLATIONS.en[key]||'';return translateInlineText(log.message||'')}
+function dateLocale(){return state.lang==='en'?'en-US':'zh-CN'}
+function storedLocale(){try{const value=window.localStorage.getItem(LOCALE_STORAGE_KEY);return value===null?'':value}catch(error){return ''}}
+function parentLocale(){try{const lang=window.parent.document.documentElement.lang;if(!lang)return '';return lang.toLowerCase().startsWith('zh')?'zh-CN':'en'}catch(error){return ''}}
+function detectLocale(){return storedLocale()||parentLocale()||(navigator.language||'').toLowerCase().startsWith('zh')?'zh-CN':'en'}
+function watchParentLocale(){try{const observer=new MutationObserver(()=>{const next=parentLocale();if(next&&next!==state.lang){state.lang=next;try{window.localStorage.removeItem(LOCALE_STORAGE_KEY)}catch(error){}renderKeepScroll()}});observer.observe(window.parent.document.documentElement,{attributes:true,attributeFilter:['lang']})}catch(error){}}
+/* ---- state ---- */
+const state={
+ lang:'zh-CN',loaded:false,route:'overview',
+ accounts:[],logs:[],nextId:'',lastSelected:'',monthlyMode:'expiry_order',
+ rosterTitle:'',rosterBody:'',
+ settingsSaved:null,settingsDraft:null,settingsDirty:false,
+ retrySaved:null,retryDraft:null,retryDirty:false,
+ retryRuntime:{mode:'off',requests:0,retries:0,succeeded:0,failed:0,shadow_hits:0,events:[]},
+ catalog:{providers:[],models:[],loaded:false},catalogNote:'',
+ logLevel:'all',preflight:null,preflightBusy:false,
+ key:'',remember:false,keyError:false,
+ editingAuthId:null
+};
+/* ---- time / duration helpers ---- */
+function localTime(date){if(!date)return tr('未知','Unknown');const d=new Date(date);return Number.isNaN(d.getTime())?'—':d.toLocaleString(dateLocale(),{year:'numeric',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',second:'2-digit'});}
+function parseGoDurationSeconds(text){const raw=String(text||'').trim();if(!raw)return null;let total=0,seen=false;const re=/(\d+(?:\.\d+)?)(ns|us|µs|ms|s|m|h)/gi;let part;while((part=re.exec(raw))){seen=true;const value=parseFloat(part[1]);const unit=part[2].toLowerCase();const mult={ns:1e-9,us:1e-6,'µs':1e-6,ms:1e-3,s:1,m:60,h:3600}[unit];if(mult===undefined)return null;total+=value*mult}return seen?total:null}
+function cacheAgeLabel(raw){const seconds=parseGoDurationSeconds(raw);if(seconds===null)return E(raw||'—');if(seconds<60)return tr('刚刚','just now');if(seconds<3600)return `${Math.max(1,Math.floor(seconds/60))}${tr(' 分钟前','m ago')}`;if(seconds<86400)return `${Math.floor(seconds/3600)}${tr(' 小时前','h ago')}`;return `${Math.floor(seconds/86400)}${tr(' 天前','d ago')}`;}
+function relativeUntil(date){const target=new Date(date);let delta=Number.isNaN(target.getTime())?NaN:target.getTime()-Date.now();if(!Number.isFinite(delta)||delta<=0)return tr('等待重置','Reset pending');if(delta<3600000)return tr(`剩 ${Math.max(1,Math.ceil(delta/60000))} 分钟`,`${Math.max(1,Math.ceil(delta/60000))}m left`);if(delta<86400000)return tr(`剩 ${Math.ceil(delta/3600000)} 小时`,`${Math.ceil(delta/3600000)}h left`);return tr(`剩 ${Math.ceil(delta/86400000)} 天`,`${Math.ceil(delta/86400000)}d left`);}
+function durationParts(raw){const seconds=parseGoDurationSeconds(raw);if(seconds===null)return {value:String(raw||''),unit:'raw'};if(seconds>=172800&&seconds%86400===0)return {value:String(seconds/86400),unit:'d'};if(seconds%3600===0)return {value:String(seconds/3600),unit:'h'};if(seconds%60===0&&seconds>=60)return {value:String(seconds/60),unit:'m'};return {value:String(raw),unit:'raw'}}
+function buildDuration(value,unit){if(unit==='raw')return String(value);const number=Number(value);if(!Number.isFinite(number)||number<=0)throw new Error(tr('时长必须是大于 0 的数字','Duration must be a positive number'));return `${unit==='d'?number*24:number}${unit==='d'?'h':unit}`;}
+function isDuration(s){return /^(?:\d+(?:\.\d+)?(?:ns|us|µs|ms|s|m|h))+$/u.test(String(s||'').trim());}
+/* ---- toast ---- */
+function toast(message,type='success',sub=''){const area=document.getElementById('toastArea');if(!area)return;const el=document.createElement('div');el.className=`toast ${type==='error'?'error':''}`;el.setAttribute('role',type==='error'?'alert':'status');el.innerHTML=`${ic(type==='error'?'alert':'check',16)}<div><strong>${E(message)}</strong>${sub?`<small>${E(sub)}</small>`:''}</div><button type="button" aria-label="${E(tr('关闭','Close'))}">${ic('close',13)}</button>`;el.querySelector('button').addEventListener('click',()=>el.remove());area.appendChild(el);setTimeout(()=>el.remove(),type==='error'?8000:4500);}
+/* ---- v4 API layer ---- */
+function keyInputValue(){const input=document.getElementById('keyInput');return input?String(input.value||'').trim():''}
+function hasManagementKey(){return !!keyInputValue()}
+function authHeaders(){const key=keyInputValue();if(!key){state.keyError=true;throw new Error(tr('需要填写 CPA 管理密钥','CPA admin key is required'))}state.keyError=false;const name='Author'+'ization';const scheme='Bea'+'rer ';const headers={};headers[name]=key.toLowerCase().startsWith(scheme.toLowerCase())?key:scheme+key;return headers}
+async function readJSON(resp){const text=await resp.text();if(!text)return{};try{return JSON.parse(text)}catch(error){return{error:text}}}
+async function requestManagement(path,options){const opts=options||{};const headers=authHeaders();let url=MANAGEMENT_BASE+path;if(opts.query){const params=new URLSearchParams(opts.query);url+='?'+params.toString()}const init={method:opts.method||'GET',headers};if(Object.prototype.hasOwnProperty.call(opts,'body')){headers['Content-Type']=opts.contentType||'application/json';init.body=typeof opts.body==='string'?opts.body:JSON.stringify(opts.body)}const resp=await fetch(url,init);const data=await readJSON(resp);const message=data.error||data.message||tr(`请求失败：${resp.status}`,`Request failed: ${resp.status}`);if(!resp.ok){if(resp.status===401||/invalid management key/i.test(message))state.keyError=true;throw new Error(message)}return data}
+async function requestManagementRoot(path,query){const headers=authHeaders();let url='/v0/management'+path;if(query){const params=new URLSearchParams(query);url+='?'+params.toString()}const resp=await fetch(url,{method:'GET',headers});const data=await readJSON(resp);if(!resp.ok)throw new Error(data.error||data.message||tr(`请求失败：${resp.status}`,`Request failed: ${resp.status}`));return data}
+async function requestManagementText(path,options){const opts=options||{};const headers=authHeaders();if(opts.contentType)headers['Content-Type']=opts.contentType;const init={method:opts.method||'GET',headers};if(Object.prototype.hasOwnProperty.call(opts,'body'))init.body=String(opts.body);const resp=await fetch('/v0/management'+path,init);const body=await resp.text();if(!resp.ok){let message=body;try{const data=JSON.parse(body);message=data.error||data.message||body}catch(error){}throw new Error(message||tr(`请求失败：${resp.status}`,`Request failed: ${resp.status}`))}return body}
+function restoreRememberedManagementKey(){try{const key=window.localStorage.getItem(MANAGEMENT_KEY_STORAGE_KEY);if(!key)return false;state.key=key;state.remember=true;return true}catch(error){return false}}
+function persistRememberedKey(){try{if(state.remember&&state.key)window.localStorage.setItem(MANAGEMENT_KEY_STORAGE_KEY,state.key);else window.localStorage.removeItem(MANAGEMENT_KEY_STORAGE_KEY)}catch(error){}}
+function safeDownload(name,text){const blob=new Blob([text],{type:'application/json;charset=utf-8'}),url=URL.createObjectURL(blob),a=document.createElement('a');a.href=url;a.download=name;document.body.appendChild(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(url),1000);}
+/* ---- adapters: API <-> view model ---- */
+function normalizeStatus(raw){raw=raw||{};state.accounts=Array.isArray(raw.accounts)?raw.accounts:[];state.logs=Array.isArray(raw.logs)?raw.logs:[];state.nextId=raw.next_auth_id||'';state.lastSelected=raw.last_selected||'';state.monthlyMode=raw.monthly_mode||'expiry_order';const roster=raw.roster||{};const messages=[roster.warning,roster.risk_warning].filter(Boolean);state.rosterTitle=[roster.capability,roster.health].filter(Boolean).join(' / ')||'Roster lifecycle';state.rosterBody=messages.join(' ');}
+const SETTING_MAP=[
+ ['scheduler_enabled','handle_enabled','toggle'],['fallback_lower_priority','schedule_across_priorities','toggle'],
+ ['monthly_mode','monthly_mode','radio'],['refresh_interval','quota_refresh_interval','duration'],
+ ['cache_expiration','stale_after','duration'],['active_refresh_window','refresh_active_window','duration'],
+ ['reset_refresh_delay','refresh_after_reset_delay','duration'],['auth_failure_retry_interval','auth_failure_retry_interval','duration'],
+ ['failure_retry_sequence','refresh_retry_delays','text'],['refresh_on_start','refresh_on_startup','toggle'],
+ ['max_concurrent_refresh','max_refresh_concurrency','number'],['feedback_marks_exhausted','enable_usage_feedback','toggle'],
+ ['activate_new_reset','enable_reset_probe','toggle'],['probe_unconfirmed_roster','probe_on_provisional_roster','toggle'],
+ ['managed_disable','enable_managed_quota_disable','toggle'],['circuit_failure_threshold','circuit_failure_threshold','number'],
+ ['circuit_wait','circuit_open_duration','duration'],['circuit_halfopen_successes','circuit_half_open_success_threshold','number'],
+ ['max_logs','max_log_entries','number'],['log_retention','log_retention','duration'],
+ ['managed_disable_history_max','lifecycle_event_limit','number']
+];
+const SETTING_DEFAULTS={scheduler_enabled:true,fallback_lower_priority:true,monthly_mode:'expiry',refresh_interval:'30m',cache_expiration:'5h',active_refresh_window:'1h',reset_refresh_delay:'1m',auth_failure_retry_interval:'30m',failure_retry_sequence:'1m,5m,15m',refresh_on_start:false,max_concurrent_refresh:1,feedback_marks_exhausted:true,activate_new_reset:false,probe_unconfirmed_roster:false,managed_disable:false,circuit_failure_threshold:5,circuit_wait:'30m',circuit_halfopen_successes:2,max_logs:200,log_retention:'24h',managed_disable_history_max:50};
+function settingsFromAPI(api){const out=clone(SETTING_DEFAULTS);for(const [viewKey,apiKey,kind] of SETTING_MAP){let value=api[apiKey];if(value===undefined||value===null)continue;if(kind==='radio')value=value==='priority'?'monthly_first':'expiry';out[viewKey]=value}return out}
+function settingsToPayload(draft){const payload={};for(const [viewKey,apiKey,kind] of SETTING_MAP){let value=draft[viewKey];if(kind==='radio')value=value==='monthly_first'?'priority':'expiry_order';if(kind==='number')value=Number.parseInt(value,10)||0;payload[apiKey]=value}return payload}
+function retryFromAPI(api){api=api||{};const mode=!api.retry_enabled?'off':api.retry_shadow?'shadow':api.retry_always?'global':'on';return {mode,chains:(Array.isArray(api.retry_chain)?api.retry_chain:[]).map(row=>({source:row.model||'',targets:(Array.isArray(row.fallbacks)?row.fallbacks:[]).map(item=>({provider:item.provider||'',model:item.model||''}))})),advanced:{maxAttempts:api.retry_max_attempts||4,maxFrames:api.retry_max_frames||4096,silenceTimeout:api.retry_stall_timeout||'60s',waitTimeout:api.retry_hold_timeout||'90s',totalTimeout:api.retry_chain_deadline||'240s',maxBytes:api.retry_max_bytes||'8MB',stripEncrypted:api.retry_strip_reasoning!==false}}}
+function retryToPayload(draft,serverSettings){const payload=Object.assign({},serverSettings);payload.retry_enabled=draft.mode!=='off';payload.retry_shadow=draft.mode==='shadow';payload.retry_always=draft.mode==='global';payload.retry_strip_reasoning=draft.advanced.stripEncrypted!==false;payload.retry_max_attempts=Number.parseInt(draft.advanced.maxAttempts,10)||4;payload.retry_max_frames=Number.parseInt(draft.advanced.maxFrames,10)||4096;payload.retry_stall_timeout=String(draft.advanced.silenceTimeout).trim();payload.retry_hold_timeout=String(draft.advanced.waitTimeout).trim();payload.retry_chain_deadline=String(draft.advanced.totalTimeout).trim();payload.retry_max_bytes=String(draft.advanced.maxBytes).trim();payload.retry_chain=draft.chains.filter(c=>String(c.source||'').trim()).map(chain=>({model:String(chain.source).trim(),fallbacks:chain.targets.filter(target=>String(target.model||'').trim()).map(target=>({provider:String(target.provider||'').trim(),model:String(target.model).trim()}))}));return payload}
+function normalizeRetryRuntime(raw){raw=raw||{};state.retryRuntime={mode:raw.mode||'off',requests:raw.requests||0,retries:raw.retries||0,succeeded:raw.succeeded||0,failed:raw.failed||0,shadow_hits:raw.shadow_hits||0,events:Array.isArray(raw.events)?raw.events.slice().reverse():[]};}
+/* ---- validation ---- */
+function validateSettings(draft){for(const [key,type] of SETTING_MAP.map(item=>[item[0],item[2]])){const value=draft[key];if(type==='duration'&&!isDuration(value))throw new Error(tr('非法时长：','Invalid duration: ')+key+` = ${value}`);if(type==='number'&&(!Number.isInteger(Number(value))||Number(value)<=0))throw new Error(tr('数字必须为正整数：','Number must be a positive integer: ')+key);}if(!String(draft.failure_retry_sequence).split(',').every(x=>isDuration(x.trim())))throw new Error(tr('刷新失败重试间隔格式错误','Invalid refresh retry sequence'));}
+function validateRetry(draft){const a=draft.advanced;if(draft.mode==='on'&&draft.chains.length===0)throw new Error(tr('启用重试时，至少配置一条模型链','Enabled retry requires at least one chain'));if(new Set(draft.chains.map(c=>String(c.source).trim())).size!==draft.chains.length)throw new Error(tr('原始模型不能重复','Source models must be unique'));if(draft.chains.some(c=>!String(c.source).trim()||!c.targets.length||c.targets.some(t=>!String(t.model).trim())))throw new Error(tr('模型名不可为空，每条链至少有一个备用目标','Each chain needs a source and at least one valid target'));if(!Number.isInteger(+a.maxAttempts)||+a.maxAttempts<1||+a.maxAttempts>16)throw new Error(tr('最大尝试次数必须为 1–16','Max attempts must be 1–16'));if(['silenceTimeout','waitTimeout','totalTimeout'].some(k=>!isDuration(a[k])))throw new Error(tr('高级参数存在非法时长','Invalid duration in advanced settings'));if(!/^\d+(\.\d+)?(B|KB|MB|GB|TB|KiB|MiB|GiB|TiB)$/i.test(String(a.maxBytes).trim()))throw new Error(tr('字节上限格式应为 8MB 这样的写法','Byte limit must look like 8MB'));if(+a.maxFrames<=0)throw new Error(tr('帧上限必须大于 0','Frame limit must be positive'));}
+/* ---- render: shell ---- */
+function renderSidebar(){
+ const nav=[['overview','grid',['账号总览','Overview']],['logs','logs',['日志','Logs']],['settings','settings',['调度设置','Scheduling']],['retry','retry',['模型重试链','Model retry chains']]];
+ return `<aside class="sidebar">
+ <div class="brand"><div class="brand-mark" aria-hidden="true"><svg width="25" height="25" viewBox="0 0 40 25" fill="none"><path d="M19 12.5C11 1 4 4 4 12.5S11 24 19 12.5 34 1 36 12.5s-7 11-17 0" stroke="white" stroke-width="4.2" stroke-linecap="round"/></svg></div><div><div class="brand-title">Codex ${tr('额度调度器','Quota Scheduler')}</div><div class="brand-subtitle">${tr('智能调度 · 榨干每一份额度','Smart routing · Maximum quota utility')}</div></div></div>
+ <nav class="nav" aria-label="${tr('主导航','Main navigation')}">${nav.map(([route,icon,label])=>`<a class="nav-item" href="#${route}" ${state.route===route?'aria-current="page"':''}>${ic(icon,17)}<span>${tr(...label)}</span></a>`).join('')}</nav>
+ <div class="sidebar-bottom">
+  <label class="sidebar-label" for="language">${tr('界面语言 / Language','Interface language')}</label>
+  <select id="language" class="sidebar-select" aria-label="Language"><option value="zh-CN" ${state.lang==='zh-CN'?'selected':''}>中文（简体）</option><option value="en" ${state.lang==='en'?'selected':''}>English</option></select>
+  <label class="sidebar-label secret-label" for="keyInput">${ic('lock',12)} CPA ${tr('管理密钥','Admin key')}</label>
+  <input id="keyInput" class="sidebar-input ${state.keyError?'is-error':''}" type="password" value="${E(state.key)}" placeholder="${tr('输入 CPA 管理密钥','Enter CPA admin key')}" autocomplete="off" spellcheck="false" aria-label="CPA admin key">
+  <label class="remember"><input id="rememberKey" type="checkbox" ${state.remember?'checked':''}><span>${tr('在此浏览器中记住管理密钥','Remember admin key in this browser')}</span></label>
+  <div class="sidebar-help">${ic('info',14)}<span>${tr('密钥明文存于浏览器本地存储，仅受信任设备启用','Stored as plaintext in browser local storage. Enable only on trusted devices.')}</span></div>
+  <button class="sidebar-primary" type="button" data-action="load">${ic(state.loaded?'refresh':'download',15)} ${state.loaded?tr('刷新额度','Refresh quotas'):tr('加载数据','Load data')}</button>
+  <div class="sidebar-running">${ic('info',15)}<span>${tr('调度器后台自动运行，无需保持页面开启','The scheduler runs in the background. You can close this page.')}</span></div>
+ </div></aside>`;
+}
+function renderHeader(title,subtitle,right=''){
+ return `<header class="page-header"><div><h1>${title}</h1><p>${subtitle}</p></div><div class="header-status">${right||(state.loaded?`<span class="dot"></span><span>${tr('已连接','Connected')}</span>`:'')}</div></header>`;
+}
+function rosterWarning(){return state.rosterBody?`<div class="banner" role="alert">${ic('alert',18)}<div><strong>${E(state.rosterTitle)}</strong><p>${E(state.rosterBody)}</p></div></div>`:'';}
+/* ---- render: overview ---- */
+function pctTone(r){return r===null||r===undefined?'missing':r>60?'green':r>=30?'amber':'red';}
+function quotaMarkup(q,label){
+ const isMissing=!q||q.missing||q.remaining_percent==null;const rem=isMissing?null:Math.max(0,Math.min(100,Number(q.remaining_percent)));
+ const valueText=isMissing?tr('暂无数据','No data'):tr(`已用 ${Math.round(Number(q.used_percent))}% · 剩 ${Math.round(rem)}%`,`Used ${Math.round(Number(q.used_percent))}% · ${Math.round(rem)}% left`);
+ return `<div class="quota-row"><div class="quota-labels"><div class="qname">${label}</div><div class="qpercent">${valueText}</div><div class="qreset" title="${q&&!isMissing?E(localTime(q.reset_at||q.reset_text)):''}">${isMissing?tr('等待刷新','Refresh pending'):relativeUntil(q.reset_at||q.reset_text)}</div></div>
+ <div class="progress" role="progressbar" aria-label="${E(label)}" aria-valuemin="0" aria-valuemax="100" ${isMissing?'':'aria-valuenow="'+rem+'"'}><span class="${pctTone(rem)}" style="width:${isMissing?'100':rem}%"></span></div></div>`;
+}
+function reasonText(a){
+ if(a.auth_failure||a.unavailable_reason==='auth_failed')return tr('请重新登录','Login required');
+ if(a.unavailable_reason==='temporary_exhausted')return `${tr('额度已耗尽','Quota exhausted')} · ${relativeUntil(a.five_hour&&a.five_hour.reset_at)}`;
+ if(a.unavailable_reason==='long_exhausted')return `${tr('长额度耗尽','Long quota exhausted')} · ${relativeUntil(a.long_window&&a.long_window.reset_at)}`;
+ if(a.unavailable_reason==='circuit_open')return tr('熔断：等待中','Circuit: waiting');
+ if(a.unavailable_reason==='managed_disabled')return tr('托管停用 · 恢复中','Managed disable · recovering');
+ if(a.unavailable_reason==='stale_quota'||a.unavailable_reason==='stale')return tr('额度数据过期','Quota data stale');
+ return tr('暂不可用','Unavailable');
+}
+function accountCard(a){
+ const isNext=a.auth_id===state.nextId;
+ const pinned=Number(a.scheduler_priority)===999;
+ const badges=[...(isNext?[pill(tr('下一优先','Next choice'),'outline')]:[]),
+                  a.available?pill(tr('可用','Available'),'green'):pill(reasonText(a),'red'),
+                  pill(a.family==='weekly'?'weekly':a.family==='monthly'?'monthly':tr('未知','unknown'),'grey')];
+ if(a.circuit&&(a.circuit.state==='half_open'||a.circuit.state==='open'))badges.push(pill(tr('熔断：','Circuit: ')+(a.circuit.label||(a.circuit.state==='open'?tr('等待中','waiting'):tr('半开','half-open'))),'amber'));
+ if(a.auth_failure)badges.push(pill(tr('登录失效','Auth expired'),'red'));
+ if(a.refresh_due_reason)badges.push(pill(tr('上次刷新失败','Last refresh failed'),'amber'));
+ const pinLabel=pinned?tr('取消固定','Unpin'):tr('固定','Pin');
+ const avatarTone=a.auth_failure?'red':a.available?(a.family==='monthly'?'purple':'green'):'orange';
+ return `<article class="panel account-card ${isNext?'is-next':''} ${pinned?'is-pinned':''} ${!a.available?'is-unavailable':''}" data-account="${E(a.auth_id)}" aria-label="${E(a.alias||a.auth_id)}">
+ <div class="account-top"><div class="account-avatar ${avatarTone}">${ic(a.available?'user':a.auth_failure?'lock':'activity',19)}</div><div class="account-id-block"><div class="account-name" title="${E(a.alias||a.auth_id)}">${E(a.alias||a.auth_id)}</div><div class="account-id mono">${E(a.auth_id)}</div></div><span class="rank">#${a.rank}</span></div>
+ <div class="attr-line">${a.group?pill(a.group,'blue'):''}${(a.tags||[]).map(tag=>pill(tag,'grey')).join('')}${pinned?pill('📌 999','blue'):''}</div>
+ <div class="tech-line"><span>CPA ${tr('优先级','priority')} <strong>${Number(a.cpa_priority)}</strong></span><span>${tr('插件优先级','Scheduler priority')} <strong>${Number(a.scheduler_priority)}</strong></span></div>
+ <div class="badge-row">${badges.join('')}</div>
+ ${quotaMarkup(a.five_hour,tr('5 小时额度','5-hour quota'))}
+ ${quotaMarkup(a.long_window,a.family==='monthly'?tr('月度额度','Monthly quota'):tr('周额度','Weekly quota'))}
+ <div class="account-meta">
+  <div>${tr('缓存','Cached')} ${cacheAgeLabel(a.cache_age)} · ${tr('来源','Source')} ${a.quota_source==='observed'?tr('响应观测','Response observation'):tr('轮询刷新','Polling')}</div>
+  <div>${tr('主动重置','Active resets')} ${Number(a.reset_credits_available_count)||0} / ${tr('累计','total')} ${Number(a.reset_credits_total_earned_count)||0}</div>
+  ${a.managed_disable?`<div>${tr('托管停用','Managed disable')}: ${E(a.managed_disable.state||'—')}</div>`:''}
+  ${a.status_note?`<div>${E(a.status_note)}</div>`:''}
+  ${a.next_retry_text&&a.available?`<div>${tr('下次重试','Next retry')}: ${E(a.next_retry_text)}</div>`:''}
+  ${a.last_error?`<div style="color:var(--danger)">${tr('最后错误','Last error')}: ${E(a.last_error)}</div>`:''}
+ </div>
+ ${(a.notes||a.group_notes)?`<div class="account-notes">${a.notes?E(a.notes):''}${a.group_notes?`<div>${E(a.group_notes)}</div>`:''}</div>`:''}
+ <div class="card-actions">${button('pin',ic('pin',13)+pinLabel,pinned?'btn-subtle':'',`data-id="${E(a.auth_id)}"`)}${button('refresh-account',ic('refresh',13)+tr('刷新额度','Refresh'),'',`data-id="${E(a.auth_id)}"`)}${button('edit',ic('edit',13)+tr('编辑','Edit'),'',`data-id="${E(a.auth_id)}"`)}</div>
+</article>`;
+}
+function renderOverview(){
+ const available=state.accounts.filter(a=>a.available).length;
+ const empty=state.accounts.length===0?STATUS.empty_state||{}:{};
+ return `${renderHeader(tr('账号总览','Account overview'),tr('实时查看账号额度、健康状态与调度优先级','Live quota, account health, and scheduling priority'))}
+ ${rosterWarning()}
+ <section class="metrics" aria-label="${tr('关键指标','Key metrics')}">
+  <div class="panel metric"><div class="metric-icon">${ic('arrow',21)}</div><div><div class="metric-label">${tr('下一账号','Next account')}</div><div class="metric-value mono">${E(state.nextId||tr('暂无','None'))}</div><div class="metric-hint">${tr('下一次 Codex 请求会选中的账号','Account selected for the next request')}</div></div></div>
+  <div class="panel metric"><div class="metric-icon">${ic('calendar',21)}</div><div><div class="metric-label">Monthly ${tr('模式','mode')}</div><div class="metric-value">${state.monthlyMode==='priority'?tr('优先使用月度账号','Monthly first'):tr('按到期时间排序','Order by expiry')}</div><div class="metric-hint">${tr('月度账号额度使用策略','Monthly quota usage strategy')}</div></div></div>
+  <div class="panel metric"><div class="metric-icon">${ic('clock',21)}</div><div><div class="metric-label">${tr('最近选择','Last selected')}</div><div class="metric-value mono">${E(state.lastSelected||tr('暂无','None'))}</div><div class="metric-hint">${tr('上一次实际选中的账号','Most recently used account')}</div></div></div>
+ </section>
+ <div class="section-heading"><h2>${tr('调度队列','Scheduling queue')} <span>(${state.accounts.length})</span></h2><span>${tr('当前可用','Available')} ${available} / ${state.accounts.length} · ${tr('按调度顺序显示','Ordered by scheduler priority')}</span></div>
+ ${state.accounts.length?`<section class="accounts-grid">${state.accounts.map(accountCard).join('')}</section>`:`<div class="panel empty"><div class="empty-icon">${ic('users',24)}</div><h3>${E(empty.title||tr('暂无账号数据','No account data yet'))}</h3><p>${E(empty.message||tr('等待额度刷新后，这里会显示账号卡片。','Cards will appear after the next quota refresh.'))}</p></div>`}`;
+}
+/* ---- render: logs ---- */
+function logFieldsText(log){if(!log.fields)return '';if(typeof log.fields==='string')return log.fields;return Object.entries(log.fields).map(([key,value])=>`${key}=${value}`).join(', ');}
+function renderLogs(){
+ const levels=['all','info','warn','error'];const counts={all:state.logs.length};for(const level of ['info','warn','error'])counts[level]=state.logs.filter(x=>x.level===level).length;
+ const all=state.logs.slice().sort((a,b)=>new Date(b.time)-new Date(a.time));const filtered=all.filter(x=>state.logLevel==='all'||x.level===state.logLevel).slice(0,80);
+ const pills={info:'blue',warn:'amber',error:'red'};
+ return `${renderHeader(tr('日志','Activity logs'),tr('查看近期调度、刷新与重试事件，最多展示 80 条','Recent scheduling, quota refresh and retry events, up to 80 entries'))}${rosterWarning()}
+ <div class="toolbar logs-toolbar"><div class="filters" role="group" aria-label="${tr('日志级别','Log levels')}">${levels.map(level=>`<button class="filter ${state.logLevel===level?'is-active':''}" type="button" data-action="filter-log" data-level="${level}" aria-pressed="${state.logLevel===level}">${level==='all'?tr('全部','All'):level==='info'?'● info':level==='warn'?'▲ warn':'✕ error'} <span class="count">${counts[level]}</span></button>`).join('')}</div>
+ <div class="toolbar-actions">${button('refresh-logs',ic('refresh',14)+tr('刷新日志','Refresh logs'))}${button('export-logs',ic('download',14)+tr('导出日志 (JSON)','Export logs (JSON)'))}</div></div>
+ <section class="panel" aria-label="${tr('日志列表','Log entries')}"><div class="log-table-wrap"><table class="data-table"><colgroup><col style="width:170px"><col style="width:96px"><col style="width:245px"><col style="width:30%"><col></colgroup><thead><tr><th>${tr('时间（本地）','Time (local)')}</th><th>${tr('等级','Level')}</th><th>${tr('事件名','Event')}</th><th>${tr('消息','Message')}</th><th>${tr('字段','Fields')}</th></tr></thead><tbody>
+ ${filtered.length?filtered.map(row=>`<tr><td class="muted-cell">${localTime(row.time)}</td><td>${pill(row.level,pills[row.level])}</td><td><span class="mono log-event">${E(row.event)}</span></td><td>${E(localizedLogMessage(row))}</td><td class="mono fields">${E(logFieldsText(row))}</td></tr>`).join(''):`<tr><td colspan="5"><div class="empty"><div class="empty-icon">${ic('logs',22)}</div><h3>${tr('暂无日志','No logs yet')}</h3><p>${tr('发起请求或手动刷新额度后，这里会显示记录。','Entries appear after requests or a manual quota refresh.')}</p></div></td></tr>`}
+ </tbody></table></div><div class="table-footer"><span>${tr(`共 ${all.length} 条日志（当前筛选 ${filtered.length} 条）`,`Total ${all.length} logs (${filtered.length} shown)`)}</span><span>${tr('倒序 · 最多 80 条','Newest first · Maximum 80')}</span></div></section>`;
+}
+/* ---- render: settings ---- */
+function renderSwitch(name,checked,scope='setting'){
+ return `<label class="switch" title="${tr('点击切换','Toggle')}"><input type="checkbox" data-${scope}="${E(name)}" ${checked?'checked':''} role="switch" aria-checked="${checked}"><span class="switch-track" aria-hidden="true"></span></label>`;
+}
+const SETTING_GROUPS=[
+ {id:'general',icon:'settings',title:['常规','General'],description:['决定调度器何时接管请求，以及账号之间如何排序','Control when the scheduler handles requests and how accounts are ranked'],items:[
+  ['scheduler_enabled','toggle',['启用调度接管','Enable scheduling takeover'],['开启后，每次 Codex 请求由本插件按额度可用性选择账号；关闭则完全交回 CPA 内置调度','When enabled, this plugin selects Codex accounts by quota availability; when off, CPA handles scheduling.']],
+  ['fallback_lower_priority','toggle',['更高优先级耗尽时使用较低优先级账号','Allow lower-priority accounts when higher tiers are exhausted'],['开启后，所有 CPA 优先级层级的账号都会纳入调度；更高层级只要还有可用账号就一定优先，仅在更高层级全部不可用时才会选用低层级。关闭则保持只调度最高优先级层','Consider all CPA priority tiers, but use a lower tier only when all higher-tier accounts are unavailable. Off: highest tier only.']],
+  ['monthly_mode','radio',['月度账号使用方式','Monthly account strategy'],['月度（Monthly）账号的额度按月重置。「按到期时间排序」先用重置时间最早的月度账号，避免月底额度浪费；「优先使用月度账号」总是先用完月度账号，再动周额度账号','Monthly quotas reset monthly. Expiry order uses the soonest-resetting monthly account first; monthly-first exhausts monthly accounts before weekly ones.']]
+ ]},
+ {id:'refresh',icon:'refresh',title:['额度刷新','Quota refresh'],description:['控制插件多久向 Codex 查询一次各账号的额度，以及缓存何时算过期','Control quota polling intervals and cache expiry'],items:[
+  ['refresh_interval','duration',['额度刷新间隔','Refresh interval'],['每隔多久查询一次全部账号的额度。真实请求返回的额度信息会自动推迟下一轮查询','How often to poll all accounts; quota data from actual responses postpones the next poll.']],
+  ['cache_expiration','duration',['缓存过期判定','Cache expiry threshold'],['超过此时长没有额度数据的账号视为「过期」，优先安排刷新','An account without fresh quota data beyond this period is considered stale and refreshed first.']],
+  ['active_refresh_window','duration',['活跃刷新窗口','Active refresh window'],['最近这段时间内有过 Codex 请求时按刷新间隔执行；空闲后降频，节省额度与请求','Poll at the configured interval when requests were recent; slow down when idle.']],
+  ['reset_refresh_delay','duration',['重置后刷新延迟','Post-reset refresh delay'],['额度窗口的重置时间点过后，等多久再查询，给上游留出生成新窗口的时间','Delay polling after reset so the upstream can open a new window.']],
+  ['auth_failure_retry_interval','duration',['认证失败重试间隔','Authentication failure retry interval'],['登录失效（401）的账号按此间隔低频重试，避免频繁撞无效凭证','Retry accounts with 401 errors infrequently to avoid repeatedly using invalid credentials.']],
+  ['failure_retry_sequence','text',['刷新失败重试间隔','Refresh failure retry schedule'],['额度查询失败后的重试间隔序列（逗号分隔）；全部用完后等待下一个刷新周期','Comma-separated intervals after a failed quota poll; then wait until the next refresh cycle.']],
+  ['refresh_on_start','toggle',['启动时刷新额度','Refresh quotas on startup'],['CPA 启动时立即刷新一轮额度；关闭则等首个请求触发','Immediately poll quotas when CPA starts; otherwise wait for the first request.']],
+  ['max_concurrent_refresh','number',['最大并发刷新','Maximum parallel quota refreshes'],['同时查询额度的最大账号数。账号很多时可适当调大，但过高可能触发上游限流','Maximum accounts queried simultaneously. Higher values can cause upstream rate limits.']]
+ ]},
+ {id:'failure',icon:'alert',warn:true,title:['失败与恢复','Failures & recovery'],description:['账号出错或额度耗尽后的自动处理。⚠ 标记的选项有副作用，改动前请读说明','Handle account errors and depleted quotas. ⚠ Options can have side effects; review carefully.'],items:[
+  ['feedback_marks_exhausted','toggle',['失败反馈标记额度耗尽','Mark quota exhausted from failure feedback'],['上游确认额度耗尽（usage_limit_reached）时立即把账号标记为不可用，直到窗口重置。关闭后只能靠定时刷新发现耗尽，调度会多撞几次 429','Immediately mark accounts unavailable on usage_limit_reached until reset. Off: subsequent requests might hit more 429s.']],
+  ['activate_new_reset','toggle',['自动激活新的额度周期 ⚠','Automatically activate a new quota window ⚠'],['额度重置时间已到但新窗口迟迟未生成时，发送一次极小的 Codex 请求尝试「激活」新周期。其余时间只做只读检查；可能消耗少量额度','If no new window appears after reset, send one tiny Codex request to activate it. This may consume quota.']],
+  ['probe_unconfirmed_roster','toggle',['账号列表未确认时仍允许额度探测 ⚠','Allow probing with an unconfirmed roster ⚠'],['CPA 暂时无法确认当前账号及优先级时，允许插件用最近保存的账号列表执行上面的探测。每次都会重新验证凭据，但无法保证账号未被删除或调整。通常应保持关闭','When CPA cannot confirm current accounts, use a saved roster for probing with credential revalidation. Usually keep off.']],
+  ['managed_disable','toggle',['额度耗尽时在 CPA 层停用账号并自动恢复 ⚠','Disable exhausted accounts in CPA and restore automatically ⚠'],['确认额度耗尽时把该账号的 CPA 凭据标记为 disabled，之后按刷新间隔只读检查，两个额度窗口都可用时才自动恢复。人工手动停用的账号绝不会被改动。开启后插件会写宿主的认证文件','Mark exhausted CPA credentials disabled; automatically restore after both windows recover. Never change manually disabled accounts. Writes to host auth files.']]
+ ]},
+ {id:'circuit',icon:'shield',title:['熔断器','Circuit breaker'],description:['账号连续失败后临时停用一段时间，避免持续向故障账号发请求','Temporarily suspend accounts after repeated failures'],items:[
+  ['circuit_failure_threshold','number',['熔断失败阈值','Failure threshold'],['连续失败达到该次数后进入熔断，暂时不再选择该账号','Open the circuit after this many consecutive failures.']],
+  ['circuit_wait','duration',['熔断等待时间','Circuit cooldown'],['熔断后等待多久，才允许半开试探','How long to wait before allowing half-open probes.']],
+  ['circuit_halfopen_successes','number',['半开恢复成功次数','Half-open recovery successes'],['半开试探期成功该次数后，账号完全恢复参与调度','Number of successful probes before fully restoring an account.']]
+ ]},
+ {id:'history',icon:'logs',title:['日志与历史','Logs & history'],description:['插件日志与托管停用历史的容量上限，超出后丢弃最旧记录','Retention limits for logs and managed-disable history'],items:[
+  ['max_logs','number',['最大日志条数','Maximum log entries'],['面板与导出中保留的最大日志条数','Maximum entries retained in the interface and JSON export.']],
+  ['log_retention','duration',['日志保留时间','Log retention'],['日志的最长保留时间，超期的记录在刷新时清理','Old log entries are deleted during refresh.']],
+  ['managed_disable_history_max','number',['托管停用历史条数上限','Managed-disable history size'],['「CPA 层停用并自动恢复」的历史最多记录条数，用于排查自动停用原因','History entries for CPA-managed disabling and restoration, used for diagnostics.']]
+ ]}
+];
+function settingsControl(item){
+ const [key,type]=item;const v=state.settingsDraft[key];
+ if(type==='toggle')return renderSwitch(key,!!v);
+ if(type==='radio')return `<div class="setting-control">${[['expiry',tr('按到期时间排序','Order by expiry')],['monthly_first',tr('优先使用月度账号','Monthly first')]].map(([value,label])=>`<label class="radio-label"><input type="radio" name="monthly_mode" value="${value}" data-setting="monthly_mode" ${v===value?'checked':''}>${label}</label>`).join('')}</div>`;
+ if(type==='duration'){const d=durationParts(v);return `<div class="unit-control"><input class="input" type="${d.unit==='raw'?'text':'number'}" min="0.001" step="any" value="${E(d.value)}" data-duration-value="${key}" aria-label="${E(key)} value"><select class="select" data-duration-unit="${key}" aria-label="${E(key)} unit">${[['m',tr('分钟','Minutes')],['h',tr('小时','Hours')],['d',tr('天','Days')],['raw',tr('原始','Raw')]].map(([u,label])=>`<option value="${u}" ${d.unit===u?'selected':''}>${label}</option>`).join('')}</select></div>`;}
+ return `<input class="input ${type==='number'?'narrow':''}" type="${type==='number'?'number':'text'}" ${type==='number'?'min="1" step="1"':''} data-setting="${key}" value="${E(v)}" aria-label="${E(key)}">`;
+}
+function settingRow(item){const [key,type,name,help]=item;return `<div class="setting-row ${type==='radio'?'radio-setting':''}"><div class="setting-description"><label class="setting-name">${E(tr(...name))}</label><div class="setting-help">${E(tr(...help))}</div></div><div class="setting-control">${settingsControl(item)}</div></div>`;}
+function settingsGroup(group){return `<section class="panel settings-panel"><div class="group-header"><div class="group-icon ${group.warn?'warn':''}">${ic(group.icon,18)}</div><div><h2 class="group-title">${E(tr(...group.title))}</h2><p class="group-desc">${E(tr(...group.description))}</p></div></div>${group.items.map(settingRow).join('')}${group.id==='failure'?`<div class="settings-footnote">${ic('alert',13)} ${tr('⚠ 后两项属于高风险操作（使用过期账号列表探测、写宿主认证文件）；默认关闭，除非明确需要。','⚠ The last two options are high risk (probing with a stale roster, writing host auth files); leave off unless required.')}</div>`:''}</section>`;}
+function renderSettings(){
+ const columns=[[SETTING_GROUPS[0],SETTING_GROUPS[2],SETTING_GROUPS[4]],[SETTING_GROUPS[1],SETTING_GROUPS[3]]];
+ return `${renderHeader(tr('调度设置','Scheduling settings'),tr('配置调度策略、刷新周期与故障恢复机制','Configure scheduling strategies, refresh intervals and recovery'))}
+ ${rosterWarning()}
+ <div class="banner blue settings-note">${ic('info',18)}<div><strong>${tr('默认配置已经过优化','Defaults are already optimized')}</strong><p>${tr('正常情况下无需手动调整；如有修改，请在页面底部保存设置。','Most installations require no manual tuning. Remember to save changes at the bottom.')}</p></div></div>
+ ${state.loaded&&!state.settingsDraft.activate_new_reset?`<div class="banner">${ic('alert',18)}<div><strong>${tr('自动激活新的额度周期：当前已关闭','Automatic activation of new quota windows is off')}</strong><p>${tr('额度重置后只进行只读检查，不会主动发起激活请求；打开可能消耗少量额度。','After quota reset, the scheduler only performs read-only checks; activation can consume quota.')}</p></div></div>`:''}
+ <div class="settings-grid">${columns.map(column=>`<div class="settings-col">${column.map(settingsGroup).join('')}</div>`).join('')}</div>
+ <div class="settings-savebar"><div class="dirty-label">${state.settingsDirty?`<strong>● ${tr('有未保存的设置修改','Unsaved scheduling changes')}</strong>`:tr('当前设置已保存','Scheduling settings are saved')} · ${tr('与重试链设置独立保存','Saved independently from retry settings')}</div><div class="toolbar-actions">${button('export-settings',ic('download',14)+tr('导出配置','Export settings'))}${button('import-settings',ic('upload',14)+tr('导入配置','Import settings'))}${button('save-settings',ic('check',14)+tr('保存设置','Save settings'),'btn-primary')}</div></div>`;
+}
+/* ---- render: retry ---- */
+function chainMarkup(chain,index){
+ return `<div class="chain-card"><div class="chain-origin"><div class="chain-origin-label">${tr('客户端请求的模型','Client-requested model')}</div><input class="input mono" type="text" value="${E(chain.source)}" placeholder="gpt-4o" data-chain-source="${index}" list="known-models" aria-label="Source model ${index+1}"></div>
+ <div class="chain-arrow">${ic('arrow',17)}</div><div><div class="chain-origin-label">${tr('备用目标（按尝试顺序）','Fallback targets (in retry order)')}</div><div class="target-list">${chain.targets.map((target,i)=>`<div class="target-item"><span class="target-index">${i+1}</span><input class="input mono" placeholder="${E(tr('提供方（可空）','provider (optional)'))}" data-target-field="provider" data-chain-index="${index}" data-target-index="${i}" value="${E(target.provider)}" list="known-providers" aria-label="Provider ${i+1}"><input class="input mono" placeholder="model" list="known-models" data-target-field="model" data-chain-index="${index}" data-target-index="${i}" value="${E(target.model)}" aria-label="Fallback model ${i+1}"><button class="btn btn-icon btn-sm" type="button" title="${tr('上移','Move up')}" aria-label="${tr('上移备用目标','Move fallback up')}" data-action="move-target-up" data-ci="${index}" data-ti="${i}" ${i===0?'disabled':''}>${ic('up',13)}</button><button class="btn btn-icon btn-sm" type="button" title="${tr('下移','Move down')}" aria-label="${tr('下移备用目标','Move fallback down')}" data-action="move-target-down" data-ci="${index}" data-ti="${i}" ${i===chain.targets.length-1?'disabled':''}>${ic('down',13)}</button><button class="btn btn-icon btn-sm btn-danger" type="button" title="${tr('移除备用目标','Remove fallback')}" aria-label="${tr('移除备用目标','Remove fallback')}" data-action="delete-target" data-ci="${index}" data-ti="${i}">${ic('close',13)}</button></div>`).join('')}</div><div class="chain-footer">${button('add-target',ic('plus',13)+tr('添加备用目标','Add fallback'),'btn-sm',`data-ci="${index}"`)}</div></div>
+ <div class="chain-tools"><button class="btn btn-icon btn-sm btn-danger" type="button" title="${tr('删除整条模型链','Delete chain')}" data-action="delete-chain" data-ci="${index}" aria-label="${tr('删除整条模型链','Delete chain')}">${ic('trash',15)}</button><button class="btn btn-icon btn-sm" type="button" data-action="move-chain-up" data-ci="${index}" ${index===0?'disabled':''} aria-label="${tr('上移模型链','Move chain up')}">${ic('up',15)}</button><button class="btn btn-icon btn-sm" type="button" data-action="move-chain-down" data-ci="${index}" ${index===state.retryDraft.chains.length-1?'disabled':''} aria-label="${tr('下移模型链','Move chain down')}">${ic('down',15)}</button></div></div>`;
+}
+function advancedInput(key,value,name,help,type='number'){
+ const isBool=type==='toggle',isText=type==='text';
+ const control=isBool?renderSwitch(key,value,'advanced'):`<input class="input" data-advanced="${key}" type="${isText?'text':'number'}" ${isText?'':'min="1" step="1"'} value="${E(value)}">`;
+ return `<div class="setting-row"><div><label class="setting-name">${name}</label>${help?`<div class="setting-help">${help}</div>`:''}</div><div class="setting-control">${control}</div></div>`;
+}
+function renderPreflight(){
+ const pre=state.preflight;
+ const statusBlock=pre?(pre.ok?`<div class="preflight-status good">${ic('check',17)}<div><strong>${tr('✓ CPA 版本与四项前置配置全部正确','✓ CPA version and all prerequisites are correct')}</strong><p>${tr('重试链可以正常工作。','Model retry chains are ready.')}</p></div></div>`
+   :`<div class="preflight-status">${ic('alert',17)}<div><strong>${E(pre.note||tr('⚠ 检测到待修复的 CPA 配置差异','⚠ Differences detected in CPA configuration'))}</strong><p>${tr('请核对以下差异并确认是否应用推荐值。','Review the differences below and confirm the recommended values.')}</p></div></div>`)
+   :`<div class="preflight-status good">${ic('check',17)}<div><strong>${tr('尚未检查','Not checked yet')}</strong><p>${tr('点击「检查并修复」读取 CPA 当前配置并与推荐值对照。','Click Check & fix to read the live CPA configuration and compare it with the recommendations.')}</p></div></div>`;
+ const confirmBlock=pre&&!pre.ok&&pre.expanded?`<div class="confirmation"><h3>${tr('将以下配置调整为推荐值？','Apply recommended configuration?')}</h3><table class="diff-table"><thead><tr><th>${tr('配置项','Setting')}</th><th>${tr('当前值','Current')}</th><th>${tr('推荐值','Recommended')}</th></tr></thead><tbody>${pre.rows.map(([name,current,recommended])=>`<tr><td class="mono">${E(name)}</td><td class="${String(current)===String(recommended)?'diff-good':'diff-bad'}">${E(current)}</td><td class="diff-good">${E(recommended)}</td></tr>`).join('')}</tbody></table><div class="toolbar-actions">${button('apply-preflight',ic('check',14)+tr('应用推荐设置','Apply recommended'),'btn-primary')}${button('cancel-preflight',tr('取消','Cancel'))}</div></div>`:'';
+ return `<section class="panel content-panel"><div class="panel-title"><div><h2>${tr('CPA 前置检查','CPA prerequisites')}</h2><p>${tr('检查宿主版本和 request-retry / buffering / timeout / bootstrap-retries 配置','Check CPA version and four prerequisite settings')}</p></div>${button('check-preflight',ic('shield',14)+tr('检查并修复','Check & fix'),state.preflightBusy?'':'')}</div>
+ ${statusBlock}${confirmBlock}</section>`;
+}
+function renderRetry(){
+ const adv=state.retryDraft.advanced;const rows=state.retryDraft.chains.map(chainMarkup).join('');
+ const advSummary=tr(`最大尝试 ${adv.maxAttempts} · 静默 ${adv.silenceTimeout} · 等待 ${adv.waitTimeout} · 整链 ${adv.totalTimeout} · 帧 ${adv.maxFrames} · 字节 ${adv.maxBytes} · 移除加密推理 ${adv.stripEncrypted?'✓':'✕'}`,`Max ${adv.maxAttempts} · Idle ${adv.silenceTimeout} · Wait ${adv.waitTimeout} · Chain ${adv.totalTimeout} · Frames ${adv.maxFrames} · Bytes ${adv.maxBytes} · Strip encrypted ${adv.stripEncrypted?'✓':'✕'}`);
+ const runtime=state.retryRuntime;
+ const modeLabels={off:tr('关闭','Off'),shadow:tr('影子','Shadow'),on:tr('生效','On'),global:tr('全局','Global')};
+ return `${renderHeader(tr('模型重试链','Model retry chains'),tr('配置备用模型顺序，降低上游错误对请求的影响','Configure model fallbacks for upstream errors'))}${rosterWarning()}
+ <div class="retry-stack">
+  <section class="panel retry-top"><div class="retry-top-inner"><div><div class="panel-title" style="margin:0"><div><h2>${tr('运行模式','Run mode')}</h2><p>${tr('四选一模式；影子模式不会真的重试','Choose one mode; shadow mode never executes retries')}</p></div></div><p>${tr('影子：只记录会重试的情况 · 生效：仅对重试链中的模型生效 · 全局：所有模型都可重试','Shadow: record only · Enabled: retry chain models only · Global: retry all models')}</p></div>
+  <div class="segmented" role="group" aria-label="${tr('重试运行模式','Retry mode')}">${[['off',tr('关闭','Off')],['shadow',tr('影子','Shadow')],['on',tr('生效','Enabled')],['global',tr('全局','Global')]].map(([mode,label])=>`<button type="button" data-action="retry-mode" data-mode="${mode}" aria-pressed="${state.retryDraft.mode===mode}">${label}</button>`).join('')}</div></div></section>
+  <section class="panel content-panel"><div class="panel-title"><div><h2>${tr('重试链编辑器','Retry chain editor')}</h2><p>${tr('客户端请求的模型 → 按顺序尝试的备用目标；提供方留空时由 CPA 自动选择。只对链内模型生效（全局模式除外）。','Client model → ordered fallbacks. Leave provider blank for automatic CPA selection. Chains apply only to matching models unless mode is Global.')}</p></div></div>
+  ${rows?`<div class="chains">${rows}</div>`:`<div class="empty"><div class="empty-icon">${ic('retry',23)}</div><h3>${tr('暂未配置重试链','No retry chains configured')}</h3><p>${tr('添加一个模型开始','Add a model to begin')}</p></div>`}
+  <div class="chain-actions">${button('add-chain',ic('plus',14)+tr('添加模型','Add model'),'btn-primary')}${button('load-models',ic('refresh',14)+tr('载入模型列表','Load model list'))}<span style="color:var(--muted);font-size:11px">${E(state.catalogNote||tr('备用目标支持添加、删除和上下排序','Add, remove and reorder fallback targets'))}</span></div></section>
+  ${renderPreflight()}
+  <details class="panel advanced" id="advancedPanel"><summary><span>${tr('高级参数','Advanced parameters')}</span><span style="display:flex;align-items:center;gap:10px"><span class="advanced-summary">${E(advSummary)}</span>${ic('chevron',16)}</span></summary><div class="advanced-grid">
+   ${advancedInput('maxAttempts',adv.maxAttempts,tr('最大尝试次数 (1–16)','Maximum attempts (1–16)'),'')}
+   ${advancedInput('maxFrames',adv.maxFrames,tr('保留帧上限','Retained frame limit'),'')}
+   ${advancedInput('silenceTimeout',adv.silenceTimeout,tr('单次静默超时','Silence timeout'),tr('Go duration，例如 60s','Go duration, e.g. 60s'),'text')}
+   ${advancedInput('waitTimeout',adv.waitTimeout,tr('等待可提交内容上限','Time to first committable content'),tr('Go duration，例如 90s','Go duration, e.g. 90s'),'text')}
+   ${advancedInput('totalTimeout',adv.totalTimeout,tr('整条链总时限','Total chain timeout'),tr('Go duration，例如 240s','Go duration, e.g. 240s'),'text')}
+   ${advancedInput('maxBytes',adv.maxBytes,tr('保留字节上限','Retained byte limit'),tr('例如 8MB','e.g. 8MB'),'text')}
+   ${advancedInput('stripEncrypted',adv.stripEncrypted,tr('切换模型时移除加密推理内容','Strip encrypted reasoning when switching models'),tr('Codex 加密推理由原模型签名，换模型后无法验证，建议保持开启。','Original model signs encrypted reasoning. Switching models invalidates it. Keep on.'),'toggle')}
+  </div></details>
+  <section class="panel content-panel"><div class="panel-title"><div><h2>${tr('运行记录','Runtime statistics & events')}</h2><p>${tr('查看重试行为的累计统计与最近事件','Cumulative fallback statistics and recent events')}</p></div>${button('refresh-retry-events',ic('refresh',14)+tr('刷新记录','Refresh events'))}</div>
+   <div class="retry-metrics">${[
+    [tr('模式','Mode'),modeLabels[runtime.mode]||runtime.mode||'—',null],
+    [tr('请求数','Requests'),runtime.requests,null],[tr('重试次数','Retries'),runtime.retries,null],
+    [tr('重试后成功','Success after retry'),runtime.succeeded,'var(--success)'],[tr('重试后失败','Failed after retry'),runtime.failed,'var(--danger)'],[tr('本应重试（影子）','Would retry (shadow)'),runtime.shadow_hits,'var(--primary)']
+   ].map(([label,value,color])=>`<div class="retry-metric"><div class="caption">${label}</div><div class="value" style="${color?'color:'+color:''}">${E(value)}</div></div>`).join('')}</div>
+   <div class="retry-events">${runtime.events.length?runtime.events.map(row=>`<div class="retry-event"><span style="color:var(--muted)">${E(localTime(row.at||row.time))}</span><span class="mono">${E(row.event||'')}</span><span class="mono" style="color:var(--muted)">${E([row.outcome,row.kind,row.reason,row.model?('model='+row.model):'',row.target?('target='+row.target):'',row.next_target?('next='+row.next_target):''].filter(Boolean).join(' '))}</span></div>`).join(''):`<div class="empty" style="padding:20px">${tr('暂无重试活动记录','No retry activity recorded yet')}</div>`}</div>
+  </section>
+  <div class="settings-savebar"><div class="dirty-label">${state.retryDirty?`<strong>● ${tr('有未保存的重试链修改','Unsaved retry changes')}</strong>`:tr('重试链配置已保存','Retry settings are saved')} · ${tr('与调度设置独立保存','Saved separately from scheduling settings')}</div><div class="toolbar-actions">${button('save-retry',ic('check',14)+tr('保存重试链设置','Save retry settings'),'btn-primary')}</div></div>
+ </div><datalist id="known-models">${state.catalog.models.map(model=>`<option value="${E(model)}"></option>`).join('')}</datalist><datalist id="known-providers">${state.catalog.providers.map(provider=>`<option value="${E(provider)}"></option>`).join('')}</datalist>`;
+}
+/* ---- render: root ---- */
+function getRoute(){const route=location.hash.replace('#','');return ['overview','logs','settings','retry'].includes(route)?route:'overview';}
+function renderNotLoaded(){return `<div class="not-loaded"><div class="panel empty" style="width:min(520px,100%);padding:35px"><div class="empty-icon">${ic('lock',24)}</div><h3>${tr('连接至 CPA 管理中心','Connect to CPA management')}</h3><p>${tr('在左侧输入管理密钥并点击「加载数据」。密钥只用于访问 CPA 管理接口，不会发送到其他地方。','Enter your admin key in the sidebar and click Load data. The key is only used for the CPA management API.')}</p><div style="margin-top:17px">${button('load',tr('加载数据','Load data'),'btn-primary')}</div></div></div>`;}
+function render(){
+ state.route=getRoute();document.documentElement.lang=state.lang==='en'?'en':'zh-CN';
+ const content=state.loaded?({overview:renderOverview,logs:renderLogs,settings:renderSettings,retry:renderRetry}[state.route]||renderOverview)():renderNotLoaded();
+ document.getElementById('app').innerHTML=`<div class="app-shell">${renderSidebar()}<main id="main" class="workspace" tabindex="-1">${content}</main></div>`;
+}
+function renderKeepScroll(){
+ const y=window.scrollY;const advancedOpen=document.getElementById('advancedPanel')?.open||false;
+ render();if(advancedOpen&&document.getElementById('advancedPanel'))document.getElementById('advancedPanel').open=true;
+ window.scrollTo({top:y,behavior:'instant'});
+}
+/* ---- live data flow ---- */
+let statusPollID=null;
+async function refreshSnapshot(){const data=await requestManagement('/status',{query:{format:'json'}});normalizeStatus(data);const apiSettings=data.settings||{};state.settingsSaved=settingsFromAPI(apiSettings);state.retrySaved=retryFromAPI(apiSettings);if(!state.settingsDirty)state.settingsDraft=clone(state.settingsSaved);if(!state.retryDirty)state.retryDraft=clone(state.retrySaved);}
+async function loadStatus(){await refreshSnapshot();state.loaded=true;state.keyError=false;startStatusPolling();}
+async function refreshRetryRuntime(){try{normalizeRetryRuntime(await requestManagement('/retry/status',{query:{format:'json'}}))}catch(error){}}
+function startStatusPolling(){if(statusPollID)return;statusPollID=window.setInterval(async()=>{try{await refreshSnapshot();await refreshRetryRuntime();const focus=document.activeElement;if(focus&&(focus.tagName==='INPUT'||focus.tagName==='SELECT'||focus.tagName==='TEXTAREA')&&document.getElementById('main')&&document.getElementById('main').contains(focus))return;renderKeepScroll()}catch(error){}},15000)}
+async function pollStatus(times,delayMs){for(let i=0;i<times;i++){await new Promise((resolve)=>window.setTimeout(resolve,delayMs));await refreshSnapshot();renderKeepScroll()}}
+async function loadRetryCatalog(){state.catalogNote=tr('正在载入模型列表…','Loading model list…');renderKeepScroll();try{let config=null;try{config=await requestManagementRoot('/config')}catch(error){config=null}const providers=new Set();const models=new Map();collectRetryProviders(config,providers);collectRetryModels(config,models);let files=[];try{const listing=await requestManagementRoot('/auth-files');files=Array.isArray(listing.files)?listing.files:[]}catch(error){files=[]}let queried=0;for(const file of files){addRetryProvider(providers,file&&file.provider);const name=String((file&&file.name)||'').trim();if(!name||queried>=40)continue;queried+=1;try{const detail=await requestManagementRoot('/auth-files/models',{name});for(const model of (detail.models||[]))addRetryModel(models,model&&model.id)}catch(error){}}state.catalog.providers=Array.from(providers).sort();state.catalog.models=Array.from(models.values()).sort();state.catalog.loaded=true;state.catalogNote=state.catalog.models.length===0?tr('未发现模型，可手动填写','No models found; type manually'):tr(`已载入 ${state.catalog.models.length} 个模型建议`,`Loaded ${state.catalog.models.length} model suggestions`)}catch(error){state.catalogNote=tr('模型列表载入失败，可手动填写','Could not load the model list; type manually')}}
+function collectRetryProviders(config,providers){providers.add('codex');providers.add('openai');if(!config||typeof config!=='object')return;const compat=config['openai-compatibility'];if(Array.isArray(compat)){for(const entry of compat){const name=String((entry&&entry.name)||'').trim();if(!name)continue;providers.add('openai-compatible-'+name.toLowerCase())}}for(const pair of [['gemini-api-key','gemini'],['claude-api-key','claude'],['vertex-api-key','vertex'],['codex-api-key','codex'],['interactions-api-key','interactions']]){if(config[pair[0]])providers.add(pair[1])}}
+function collectRetryModels(config,models){if(!config||typeof config!=='object')return;const compat=config['openai-compatibility'];if(!Array.isArray(compat))return;for(const entry of compat){const list=entry&&Array.isArray(entry.models)?entry.models:[];for(const model of list){for(const value of [model&&model.alias,model&&model.name])addRetryModel(models,value)}}}
+function addRetryProvider(providers,name){const value=String(name||'').trim();if(value)providers.add(value)}
+function addRetryModel(models,value){const id=String(value||'').trim();if(!id)return;models.set(id,id)}
+async function checkPreflight(){state.preflightBusy=true;renderKeepScroll();try{let version='';try{version=await requestManagementRoot('/version')}catch(error){version=''}if(version&&!cpaVersionAtLeast(String(version),7,3,4)){state.preflight={ok:false,expanded:false,rows:[],note:tr(`CPA ${version} 版本过旧，需 v7.3.4+`,`CPA ${version} is too old; v7.3.4+ required`)};return}const config=await requestManagementRoot('/config');const codex=config&&config.codex||{};const streaming=config&&config.streaming||{};const rows=[['request-retry',config&&config['request-retry'],3],['stream-bootstrap-buffering',codex['stream-bootstrap-buffering'],true],['stream-bootstrap-timeout',codex['stream-bootstrap-timeout'],'0'],['bootstrap-retries',streaming['bootstrap-retries'],1]].map(([name,current,recommended])=>[name,String(current),String(recommended)]);const ok=rows.every(([name,current,recommended])=>current===recommended);state.preflight={ok,expanded:!ok,rows,note:ok?'':tr('检测到与推荐值不一致的配置','Some settings differ from the recommendations')}}catch(error){state.preflight={ok:false,expanded:false,rows:[],note:error.message||String(error)}}finally{state.preflightBusy=false}}
+async function applyPreflight(){try{let yaml=await requestManagementText('/config.yaml');yaml=yamlTopLevelValue(yaml,'request-retry','3');yaml=yamlNestedValue(yaml,'codex','stream-bootstrap-buffering','true');yaml=yamlNestedValue(yaml,'codex','stream-bootstrap-timeout','"0"');yaml=yamlNestedValue(yaml,'streaming','bootstrap-retries','1');await requestManagementText('/config.yaml',{method:'PUT',contentType:'application/yaml',body:yaml});const after=await requestManagementRoot('/config');const codex=after&&after.codex||{};const streaming=after&&after.streaming||{};const correct=Number(after['request-retry'])===3&&codex['stream-bootstrap-buffering']===true&&String(codex['stream-bootstrap-timeout']===undefined?'':codex['stream-bootstrap-timeout'])==='0'&&Number(streaming['bootstrap-retries'])===1;if(!correct)throw new Error('CPA did not report the requested settings after hot reload');state.preflight={ok:true,expanded:false,rows:[]};toast(tr('CPA 重试前置配置已修复并热加载','CPA retry prerequisites were fixed and hot-reloaded'))}catch(error){toast(error.message||String(error),'error')}}
+function cpaVersionAtLeast(version,major,minor,patch){const match=String(version||'').match(/v?(\d+)\.(\d+)\.(\d+)/i);if(!match)return false;const actual=[Number(match[1]),Number(match[2]),Number(match[3])];const required=[major,minor,patch];for(let index=0;index<3;index+=1){if(actual[index]!==required[index])return actual[index]>required[index]}return true}
+function yamlTopLevelValue(yaml,key,value){const lines=String(yaml||'').split(/\r?\n/);const prefix=key+':';for(let index=0;index<lines.length;index+=1){const line=lines[index];if(/^\S/.test(line)&&line.trim().startsWith(prefix)){lines[index]=key+': '+value;return lines.join('\n')}}lines.unshift(key+': '+value);return lines.join('\n')}
+function yamlNestedValue(yaml,section,key,value){const lines=String(yaml||'').split(/\r?\n/);let sectionIndex=-1;let sectionIndent=-1;for(let index=0;index<lines.length;index+=1){const line=lines[index];const trimmed=line.trim();if(trimmed===section+':'||trimmed.startsWith(section+': #')){sectionIndex=index;sectionIndent=line.search(/\S/);break}}if(sectionIndex<0){if(lines.length&&lines[lines.length-1]!=='')lines.push('');lines.push(section+':','  '+key+': '+value);return lines.join('\n')}let insertAt=sectionIndex+1;let childIndent=sectionIndent+2;for(let index=sectionIndex+1;index<lines.length;index+=1){const line=lines[index];const trimmed=line.trim();if(!trimmed||trimmed.startsWith('#')){insertAt=index+1;continue}const indent=line.search(/\S/);if(indent<=sectionIndent)break;insertAt=index+1;childIndent=indent;if(trimmed.startsWith(key+':')){lines[index]=' '.repeat(indent)+key+': '+value;return lines.join('\n')}}lines.splice(insertAt,0,' '.repeat(childIndent)+key+': '+value);return lines.join('\n')}
+/* ---- account actions ---- */
+async function togglePin(authID,pinned){await requestManagement('/annotations/account',{method:'PATCH',body:{auth_id:authID,scheduler_priority:pinned?0:999}});toast(pinned?tr('已取消固定，插件优先级重置为 0','Unpinned; scheduler priority reset to 0'):tr('已固定，插件优先级设为 999','Pinned with scheduler priority 999'))}
+function openEditDialog(authID){const account=state.accounts.find(x=>x.auth_id===authID);if(!account)return;state.editingAuthId=authID;
+ const field=(label,name,value,type='text',full=false,help='')=>`<label class="form-field ${full?'full':''}">${label}${help?`<span>${help}</span>`:''}${type==='textarea'?`<textarea class="textarea" name="${name}">${E(value)}</textarea>`:`<input class="input" type="${type}" name="${name}" ${type==='number'?'min="0" step="1"':''} value="${E(value)}">`}</label>`;
+ const dialog=document.getElementById('editDialog');dialog.innerHTML=`<form id="editAccountForm" method="dialog" data-id="${E(authID)}"><div class="modal-header"><div><h2 id="editDialogTitle">${tr('编辑账号','Edit account')}</h2><small class="mono">${E(authID)}</small></div><button type="button" class="btn btn-icon" data-action="close-dialog" aria-label="${tr('关闭','Close')}">${ic('close',18)}</button></div>
+ <div class="modal-body"><div class="modal-form-grid">${field(tr('别名','Alias'),'alias',account.alias||'')}${field(tr('插件优先级','Scheduler priority'),'scheduler_priority',account.scheduler_priority,'number',false,tr('999 = 置顶 / Pin','999 = pinned'))}
+ ${field(tr('分组 ID','Group ID'),'group_id',account.group_id||'')}${field(tr('分组名称','Group name'),'group',account.group||'')}
+ ${field(tr('标签（逗号分隔）','Tags (comma-separated)'),'tags',(account.tags||[]).join(', '),'text',true)}
+ ${field(tr('账号备注','Account notes'),'notes',account.notes||'','textarea',true)}${field(tr('分组备注','Group notes'),'group_notes',account.group_notes||'','textarea',true)}</div></div><div class="modal-footer"><button type="button" class="btn" data-action="close-dialog">${tr('取消','Cancel')}</button><button type="submit" class="btn btn-primary">${ic('check',14)} ${tr('保存账号','Save account')}</button></div></form>`;
+ dialog.showModal();const input=dialog.querySelector('[name=alias]');if(input){input.focus();input.select()}}
+async function saveAccountForm(form){const authID=form.dataset.id;const data=new FormData(form);const priority=Number(data.get('scheduler_priority'));if(!Number.isSafeInteger(priority)){toast(tr('插件优先级必须是安全整数','Scheduler priority must be a safe integer'),'error');return}
+ try{await requestManagement('/annotations/account',{method:'PATCH',body:{auth_id:authID,alias:String(data.get('alias')||''),notes:String(data.get('notes')||''),tags:String(data.get('tags')||'').split(',').map(x=>x.trim()).filter(Boolean),group_id:String(data.get('group_id')||'').trim(),scheduler_priority:priority}});
+ const groupID=String(data.get('group_id')||'').trim();const groupName=String(data.get('group')||'').trim();const groupNotes=String(data.get('group_notes')||'').trim();if(groupID){const existing=state.accounts.find(x=>x.group_id===groupID);const changed=groupName!==(existing?existing.group:'')||groupNotes!==(existing?existing.group_notes:'');if(changed||true)await requestManagement('/annotations/group',{method:'PATCH',body:{id:groupID,name:groupName,notes:groupNotes}})}
+ document.getElementById('editDialog').close();toast(tr('账号卡片已保存','Account card saved'));await refreshSnapshot();renderKeepScroll()}catch(error){toast(error.message||String(error),'error')}}
+/* ---- event delegation ---- */
+document.addEventListener('click',async(ev)=>{
+ const nodeTarget=ev.target.closest('[data-action]');if(!nodeTarget)return;
+ const action=nodeTarget.dataset.action;const id=nodeTarget.dataset.id;const ci=Number(nodeTarget.dataset.ci);const ti=Number(nodeTarget.dataset.ti);
+ const chain=Number.isInteger(ci)?state.retryDraft.chains[ci]:null;
+ try{
+  if(action==='load'){
+    if(!state.loaded){await loadStatus();await refreshRetryRuntime();renderKeepScroll();toast(tr('已加载当前状态','Current state loaded'),'',0)}
+    else{await requestManagement('/refresh',{method:'POST',body:{}});toast(tr('已请求后台刷新额度','Background quota refresh requested'));await refreshSnapshot();renderKeepScroll();pollStatus(3,1200)}
+    return}
+  if(action==='pin'){await togglePin(id,Number((state.accounts.find(x=>x.auth_id===id)||{}).scheduler_priority)===999);await refreshSnapshot();renderKeepScroll();return}
+  if(action==='refresh-account'){await requestManagement('/refresh/account',{method:'POST',body:{auth_id:id}});toast(tr('已请求刷新该账号额度','Quota refresh requested for this account'));await refreshSnapshot();renderKeepScroll();pollStatus(3,1200);return}
+  if(action==='edit'){openEditDialog(id);return}
+  if(action==='close-dialog'){document.getElementById('editDialog').close();return}
+  if(action==='filter-log'){state.logLevel=nodeTarget.dataset.level;renderKeepScroll();return}
+  if(action==='refresh-logs'){await refreshSnapshot();renderKeepScroll();toast(tr('日志已刷新','Logs refreshed'));return}
+  if(action==='export-logs'){await refreshSnapshot();const payload={plugin_id:STATUS.plugin_id||'codex-quota-scheduler',exported_at:new Date().toISOString(),logs:state.logs};safeDownload('codex-quota-scheduler-logs.json',JSON.stringify(payload,null,2)+'\n');toast(tr('日志 JSON 已导出','Log JSON exported'));return}
+  if(action==='export-settings'){const data=await requestManagement('/export');safeDownload('codex-quota-scheduler-config.json',JSON.stringify(data,null,2)+'\n');toast(tr('配置已导出','Configuration exported'));return}
+  if(action==='import-settings'){document.getElementById('importFile').click();return}
+  if(action==='save-settings'){validateSettings(state.settingsDraft);await requestManagement('/settings',{method:'PUT',body:settingsToPayload(state.settingsDraft)});state.settingsSaved=clone(state.settingsDraft);state.settingsDirty=false;await refreshSnapshot();renderKeepScroll();toast(tr('设置已保存','Settings saved'));return}
+  if(action==='retry-mode'){state.retryDraft.mode=nodeTarget.dataset.mode;state.retryDirty=true;renderKeepScroll();return}
+  if(action==='add-chain'){state.retryDraft.chains.push({source:'',targets:[{provider:'',model:''}]});state.retryDirty=true;renderKeepScroll();return}
+  if(action==='delete-chain'){if(!chain)return;state.retryDraft.chains.splice(ci,1);state.retryDirty=true;renderKeepScroll();return}
+  if(action==='move-chain-up'||action==='move-chain-down'){const j=ci+(action==='move-chain-up'?-1:1);const arr=state.retryDraft.chains;if(!chain||j<0||j>=arr.length)return;[arr[ci],arr[j]]=[arr[j],arr[ci]];state.retryDirty=true;renderKeepScroll();return}
+  if(action==='add-target'){if(!chain)return;chain.targets.push({provider:'',model:''});state.retryDirty=true;renderKeepScroll();return}
+  if(action==='delete-target'){if(!chain)return;chain.targets.splice(ti,1);state.retryDirty=true;renderKeepScroll();return}
+  if(action==='move-target-up'||action==='move-target-down'){if(!chain)return;const j=ti+(action==='move-target-up'?-1:1);const arr=chain.targets;if(j<0||j>=arr.length)return;[arr[ti],arr[j]]=[arr[j],arr[ti]];state.retryDirty=true;renderKeepScroll();return}
+  if(action==='load-models'){await loadRetryCatalog();if(state.route==='retry')renderKeepScroll();return}
+  if(action==='check-preflight'){await checkPreflight();renderKeepScroll();return}
+  if(action==='cancel-preflight'){if(state.preflight)state.preflight.expanded=false;renderKeepScroll();return}
+  if(action==='apply-preflight'){await applyPreflight();renderKeepScroll();return}
+  if(action==='refresh-retry-events'){await refreshSnapshot();await refreshRetryRuntime();renderKeepScroll();toast(tr('运行记录已刷新','Runtime events refreshed'));return}
+  if(action==='save-retry'){validateRetry(state.retryDraft);const serverSettings=state.settingsSaved?settingsToPayload(state.settingsSaved):settingsToPayload(state.settingsDraft);await requestManagement('/settings',{method:'PUT',body:retryToPayload(state.retryDraft,serverSettings)});state.retrySaved=clone(state.retryDraft);state.retryDirty=false;await refreshSnapshot();await refreshRetryRuntime();renderKeepScroll();toast(tr('重试链设置已保存','Retry settings saved'));return}
+ }catch(error){toast(error.message||tr('操作失败','Operation failed'),'error');if(state.keyError)renderKeepScroll()}
+});
+document.addEventListener('input',(ev)=>{
+ const el=ev.target;const d=el.dataset;
+ if(el.id==='keyInput'){state.key=el.value;if(state.remember)persistRememberKey();return}
+ if(d.setting&&el.type!=='checkbox'&&el.type!=='radio'){state.settingsDraft[d.setting]=el.type==='number'?Number(el.value):el.value;state.settingsDirty=true;syncSavebarDirty();return}
+ if(d.chainSource!==undefined){const c=state.retryDraft.chains[+d.chainSource];if(c)c.source=el.value;state.retryDirty=true;syncSavebarDirty();return}
+ if(d.targetField){const target=state.retryDraft.chains[+d.chainIndex]&&state.retryDraft.chains[+d.chainIndex].targets[+d.targetIndex];if(target)target[d.targetField]=el.value;state.retryDirty=true;return}
+ if(d.advanced&&el.type!=='checkbox'){state.retryDraft.advanced[d.advanced]=el.type==='number'?Number(el.value):el.value;state.retryDirty=true;return}
+});
+document.addEventListener('change',(ev)=>{
+ const el=ev.target;const d=el.dataset;
+ if(el.id==='language'){state.lang=el.value;try{window.localStorage.setItem(LOCALE_STORAGE_KEY,state.lang)}catch(error){}renderKeepScroll();return}
+ if(el.id==='rememberKey'){state.remember=el.checked;persistRememberKey();return}
+ if(d.setting&&el.type==='checkbox'){
+  if(['probe_unconfirmed_roster','managed_disable'].includes(d.setting)&&el.checked&&!window.confirm(tr('此选项存在风险：可能使用过期账号列表探测，或写宿主认证文件。确认启用？','This option can probe with a stale roster or modify CPA auth files. Enable it?'))){el.checked=false;return}
+  state.settingsDraft[d.setting]=el.checked;state.settingsDirty=true;renderKeepScroll();return}
+ if(d.setting&&el.type==='radio'){state.settingsDraft[d.setting]=el.value;state.settingsDirty=true;return}
+ if(d.durationValue||d.durationUnit){const key=d.durationValue||d.durationUnit;const numberEl=document.querySelector(`[data-duration-value="${key}"]`);const unitEl=document.querySelector(`[data-duration-unit="${key}"]`);try{state.settingsDraft[key]=buildDuration(numberEl.value,unitEl.value);state.settingsDirty=true;if(el===unitEl)renderKeepScroll()}catch(error){toast(error.message,'error')}return}
+ if(d.advanced&&el.type==='checkbox'){state.retryDraft.advanced[d.advanced]=el.checked;state.retryDirty=true;renderKeepScroll();return}
+});
+document.getElementById('editDialog').addEventListener('submit',(ev)=>{ev.preventDefault();saveAccountForm(ev.target)});
+document.getElementById('importFile').addEventListener('change',async(ev)=>{
+ const file=ev.target.files&&ev.target.files[0];if(!file)return;
+ try{const text=await file.text();await requestManagement('/import',{method:'POST',contentType:'application/json',body:text});state.settingsDirty=false;await refreshSnapshot();renderKeepScroll();toast(tr('配置已导入，请确认后再次保存','Configuration imported; review and save'))}catch(error){toast(error.message||String(error),'error')}finally{ev.target.value=''}
+});
+function syncSavebarDirty(){const el=document.querySelector('.settings-savebar .dirty-label');if(!el)return;if(state.route==='settings')el.innerHTML=state.settingsDirty?`<strong>● ${tr('有未保存的设置修改','Unsaved scheduling changes')}</strong> · ${tr('与重试链设置独立保存','Saved independently from retry settings')}`:el.innerHTML;if(state.route==='retry')el.innerHTML=state.retryDirty?`<strong>● ${tr('有未保存的重试链修改','Unsaved retry changes')}</strong> · ${tr('与调度设置独立保存','Saved separately from scheduling settings')}`:el.innerHTML}
+window.addEventListener('hashchange',()=>{if(!['overview','logs','settings','retry'].includes(location.hash.slice(1)))history.replaceState(null,'','#overview');render();window.scrollTo({top:0,behavior:'instant'})});
+if(!['overview','logs','settings','retry'].includes(location.hash.slice(1)))history.replaceState(null,'','#overview');
+state.lang=detectLocale();
+restoreRememberedManagementKey();
+watchParentLocale();
+render();
+</script>
+</body>
+</html>
