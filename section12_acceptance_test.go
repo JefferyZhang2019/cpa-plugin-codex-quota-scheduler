@@ -14,7 +14,7 @@ import (
 	"time"
 
 	"github.com/jeffery/codex-quota-scheduler/testsupport"
-	"github.com/router-for-me/CLIProxyAPI/v7/sdk/pluginapi"
+	"github.com/router-for-me/CLIProxyAPI/v8/sdk/pluginapi"
 )
 
 func TestSection12A07LegacyManualQuotaConcurrent(t *testing.T) {

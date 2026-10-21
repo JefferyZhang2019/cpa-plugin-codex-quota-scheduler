@@ -8,7 +8,7 @@ import (
 	"sort"
 	"time"
 
-	"github.com/router-for-me/CLIProxyAPI/v7/sdk/pluginapi"
+	"github.com/router-for-me/CLIProxyAPI/v8/sdk/pluginapi"
 )
 
 // Managed quota disable-and-recovery, ported from dos1989's
