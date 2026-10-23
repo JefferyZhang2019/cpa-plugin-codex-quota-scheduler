@@ -14,7 +14,7 @@ import (
 	"time"
 
 	"github.com/jeffery/codex-quota-scheduler/testsupport"
-	"github.com/router-for-me/CLIProxyAPI/v7/sdk/pluginapi"
+	"github.com/router-for-me/CLIProxyAPI/v8/sdk/pluginapi"
 )
 
 func TestRuntimeSemanticPathsAndLegacyMigration(t *testing.T) {
@@ -1341,6 +1341,9 @@ func (h *rosterPublicationHost) GetAuth(authIndex string) (pluginapi.HostAuthGet
 	return response, nil
 }
 func (h *rosterPublicationHost) SaveAuth(string, json.RawMessage) error { return nil }
+func (h *rosterPublicationHost) ResetRoutingCooldown(string) (pluginapi.HostRoutingResetCooldownResponse, error) {
+	return pluginapi.HostRoutingResetCooldownResponse{}, nil
+}
 func (h *rosterPublicationHost) Do(pluginapi.HTTPRequest) (pluginapi.HTTPResponse, error) {
 	return pluginapi.HTTPResponse{StatusCode: http.StatusOK, Body: []byte(`{"rate_limit":{"secondary_window":{"used_percent":20,"limit_window_seconds":604800,"reset_after_seconds":86400}}}`)}, nil
 }
@@ -1570,6 +1573,9 @@ func (h *countingProductionHost) SaveAuth(n string, _ json.RawMessage) error {
 	h.savedName = n
 	return nil
 }
+func (h *countingProductionHost) ResetRoutingCooldown(string) (pluginapi.HostRoutingResetCooldownResponse, error) {
+	return pluginapi.HostRoutingResetCooldownResponse{}, nil
+}
 func (h *countingProductionHost) Do(req pluginapi.HTTPRequest) (pluginapi.HTTPResponse, error) {
 	h.http++
 	h.requests = append(h.requests, req)
@@ -1682,6 +1688,9 @@ func (h *lifecycleFenceHost) GetAuth(string) (pluginapi.HostAuthGetResponse, err
 	return pluginapi.HostAuthGetResponse{}, nil
 }
 func (h *lifecycleFenceHost) SaveAuth(string, json.RawMessage) error { return nil }
+func (h *lifecycleFenceHost) ResetRoutingCooldown(string) (pluginapi.HostRoutingResetCooldownResponse, error) {
+	return pluginapi.HostRoutingResetCooldownResponse{}, nil
+}
 func (h *lifecycleFenceHost) Log(string, string, map[string]any)     {}
 func (h *lifecycleFenceHost) Do(req pluginapi.HTTPRequest) (pluginapi.HTTPResponse, error) {
 	h.mu.Lock()

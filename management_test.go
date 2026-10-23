@@ -12,7 +12,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/router-for-me/CLIProxyAPI/v7/sdk/pluginapi"
+	"github.com/router-for-me/CLIProxyAPI/v8/sdk/pluginapi"
 )
 
 func TestManagementRegisterExposesStatusResourceAndRoutes(t *testing.T) {
@@ -334,11 +334,11 @@ func TestManagementRoundTripsProvisionalRiskOption(t *testing.T) {
 	store := NewPluginState(cfg)
 	page := string(RenderStatusHTML(buildCurrentStatusPayloadWithLifecycle(store, time.Now(), ManagementLifecycleSnapshot{Roster: ActiveRoster{Capability: CapabilityB, Provisional: true, Health: RosterWaiting, ConfirmedAt: time.Now().Add(-time.Hour)}})))
 	for _, want := range []string{
-		`id="probeOnProvisionalRoster"`,
-		"document.getElementById('probeOnProvisionalRoster').checked=s.probe_on_provisional_roster===true",
-		"probe_on_provisional_roster:document.getElementById('probeOnProvisionalRoster').checked",
-		`id="rosterLifecycleWarning"`,
-		"renderRosterLifecycle",
+		"['probe_unconfirmed_roster','probe_on_provisional_roster','toggle']",
+		`data-${scope}="${E(name)}"`,
+		"roster.warning,roster.risk_warning",
+		"state.rosterBody",
+		"function rosterWarning()",
 	} {
 		if !strings.Contains(page, want) {
 			t.Fatalf("status UI missing %q", want)
@@ -686,16 +686,16 @@ func TestStatusHTMLRedactsSensitiveFieldsAndEscapesUserFields(t *testing.T) {
 			t.Fatalf("html missing Chinese UI text %q: %s", want, html)
 		}
 	}
-	if strings.Contains(html, "<table") {
-		t.Fatalf("html still renders table layout: %s", html)
+	if strings.Contains(html, "<table border") {
+		t.Fatalf("html still renders legacy table layout: %s", html)
 	}
 	for _, forbidden := range []string{"access_token", "bearer ", "authorization", "cookie"} {
 		if strings.Contains(lower, forbidden) {
 			t.Fatalf("html contains sensitive field %q: %s", forbidden, html)
 		}
 	}
-	if strings.Contains(html, "<script>alert") || !strings.Contains(html, "&lt;script&gt;") || !strings.Contains(html, "Ops &amp; Finance") {
-		t.Fatalf("html did not escape user fields: %s", html)
+	if strings.Contains(html, "<script>alert") || !strings.Contains(html, `\u003cscript\u003e`) || !strings.Contains(html, `Ops \u0026 Finance`) {
+		t.Fatalf("user fields are not safely encoded for the JS-only card renderer: %s", html)
 	}
 }
 
@@ -713,14 +713,14 @@ func TestStatusHTMLUsesManagementAPIActionsModalProgressAndLogs(t *testing.T) {
 	}
 	html := string(resp.Body)
 	lower := strings.ToLower(html)
-	for _, want := range []string{"quota-bar", "editDialog", "logList", "openEdit", "exportLogs", "codex-quota-scheduler-logs.json", "maxLogEntries", "logRetention", "refreshOneQuota", "refreshStatus", "renderAccounts", "renderMetrics", "metricNextAuthID", "metricMonthlyMode", "metricLastSelected", "managementKeyField", "managementKey", "rememberManagementKey", "MANAGEMENT_KEY_STORAGE_KEY", "restoreRememberedManagementKey", "syncRememberedManagementKey", "syncManagementKeyVisibility", "showManagementKeyInput", "restoredManagementKey", "field.hidden=remember.checked&&restoredManagementKey", "togglePin", "createPinButton", "priority=pinned?0:999", "actions.pinAccount", "actions.unpinAccount", "notice.accountPinned", "notice.accountUnpinned", "codex-quota-scheduler-management-key-v1", "loadStatus", "MANAGEMENT_BASE", "/v0/management/plugins/codex-quota-scheduler", "authHeaders()", "localeSelect", "TRANSLATIONS", "codex-quota-scheduler-locale-v1", "Scheduler Settings", "Account Queue", "INLINE_TRANSLATIONS", "Reset credits", "Refresh Quota", "editSchedulerPriority", "account.schedulerPriority", "scheduler_priority", "Plugin priority", "插件优先级", "quotaResetTime", "resetRemainingText", "Math.floor(remaining/minute)", "Math.floor(remaining/hour)", "Math.floor(remaining/day)", "已到期", "quota-remaining", "quota-reset-label", "formatQuotaResetLabels", "label+' reset: '", "SORTED_INLINE_TRANSLATIONS", "right[0].length-left[0].length", "Circuit counts", "localeColon", "resetCreditCount", "Number(value)===1?'time':'times'", "data-i18n-aria", "queue.aria", "renderAccounts(STATUS.accounts||[])", "log.quota.refresh_success", "log.scheduler.fallback", "notice.dataset.i18nKey", "date.toLocaleString(dateLocale()", "storedLocale", "parentLocale", "window.parent.document.documentElement.lang", "watchParentLocale", "if(storedLocale())return", "attributeFilter:['lang']", "detectLocale(){return storedLocale()||parentLocale()||'en'}", `id="editSchedulerPriority"`} {
+	for _, want := range []string{"editDialog", "codex-quota-scheduler-logs.json", "safeDownload", "refreshSnapshot", "renderOverview", "renderLogs", "renderSettings", "renderRetry", "state.nextId", "state.monthlyMode", "state.lastSelected", "keyInput", "rememberKey", "MANAGEMENT_KEY_STORAGE_KEY", "restoreRememberedManagementKey", "persistRememberedKey", "hasManagementKey", "async function togglePin", "scheduler_priority:pinned?0:999", "Number(a.scheduler_priority)===999", "取消固定", "固定", "loadStatus", "MANAGEMENT_BASE", "/v0/management/plugins/codex-quota-scheduler", "authHeaders()", "language", "TRANSLATIONS", "codex-quota-scheduler-locale-v1", "Scheduling settings", "Account overview", "INLINE_TRANSLATIONS", "Active resets", "Refresh quotas", "openEditDialog", "scheduler_priority", "Scheduler priority", "插件优先级", "relativeUntil", "localTime(q.reset_at||q.reset_text)", "quotaMarkup(a.five_hour", "log.quota.refresh_success", "log.scheduler.fallback", "localizedLogMessage", "storedLocale", "parentLocale", "window.parent.document.documentElement.lang", "watchParentLocale", "attributeFilter:['lang']", "settingsToPayload", "retryToPayload", "validateSettings", "validateRetry", "checkPreflight", "yamlTopLevelValue", "loadRetryCatalog", "refreshRetryRuntime", "startStatusPolling", "detectLocale"} {
 		if !strings.Contains(html, want) {
 			t.Fatalf("html missing marker %q: %s", want, html)
 		}
 	}
-	for _, want := range []string{".quota-fill.warn{background:#f59e0b}", "quotaFillClass", "remaining<30?'danger':remaining<60?'warn':''"} {
+	for _, want := range []string{"function pctTone(r)", "r>60?'green':r>=30?'amber':'red'", "buildDuration", "durationParts"} {
 		if !strings.Contains(html, want) {
-			t.Fatalf("html missing quota color marker %q: %s", want, html)
+			t.Fatalf("html missing quota color marker %q: %s", html, want)
 		}
 	}
 	for _, forbidden := range []string{"RESOURCE_ENDPOINT", "PUBLIC_STATUS_BASE", "requestPublicStatus", "metricSchedulerState", "metrics.scheduler", "/v0/resource/plugins/codex-quota-scheduler/status?action", "requestPlugin(action,options)", "details class=\"editor\"", "action_token"} {
@@ -753,12 +753,17 @@ func TestStatusHTMLStaticCardShowsDistinctPriorityBadges(t *testing.T) {
 	}
 	html := string(resp.Body)
 	for _, want := range []string{
-		`<span class="badge">CPA 优先级 3</span>`,
-		`<span class="badge">插件优先级 8</span>`,
+		`tech-line`,
+		`<strong>${Number(a.cpa_priority)}</strong>`,
+		`Number(a.scheduler_priority)===999`,
+		`pill('📌 999','blue')`,
 	} {
 		if !strings.Contains(html, want) {
-			t.Fatalf("static account card missing priority badge %q: %s", want, html)
+			t.Fatalf("account card renderer missing priority marker %q: %s", want, html)
 		}
+	}
+	if strings.Contains(html, `{{range .Accounts}}`) {
+		t.Fatalf("server still renders account cards; the JS renderer must be the single track")
 	}
 }
 
@@ -785,26 +790,24 @@ func TestStatusHTMLQuotaBarsUseRemainingPercentageColorBands(t *testing.T) {
 		t.Fatalf("StatusCode = %d, want %d; body=%s", resp.StatusCode, http.StatusOK, resp.Body)
 	}
 	html := string(resp.Body)
-	if got := strings.Count(html, `class="quota-fill danger"`); got != 2 {
-		t.Fatalf("danger quota bars = %d, want 2", got)
+	if strings.Contains(html, `{{range .Accounts}}`) {
+		t.Fatalf("quota bars are still server-rendered; the JS renderer must be the single track: %s", html)
 	}
-	if got := strings.Count(html, `class="quota-fill warn"`); got != 2 {
-		t.Fatalf("orange quota bars = %d, want 2", got)
-	}
-	if got := strings.Count(html, `class="quota-fill "`); got != 2 {
-		t.Fatalf("green quota bars = %d, want 2", got)
+	for _, want := range []string{"function pctTone(r)", "r>60?'green':r>=30?'amber':'red'", `class="${pctTone(rem)}"`} {
+		if !strings.Contains(html, want) {
+			t.Fatalf("quota band logic missing %q: %s", want, html)
+		}
 	}
 }
 
 func TestStatusPageValidatesSchedulerPriorityBeforePatch(t *testing.T) {
 	page := renderStatusPageForTest(t, NewPluginState(DefaultConfig()))
 	for _, want := range []string{
-		"valueAsNumber",
-		"Number.isSafeInteger(schedulerPriority)",
-		"error.schedulerPriorityInteger",
-		"Plugin priority must be a safe integer.",
-		"插件优先级必须是安全整数。",
-		"scheduler_priority:schedulerPriority",
+		"Number.isSafeInteger(priority)",
+		"Number(data.get('scheduler_priority'))",
+		"Scheduler priority must be a safe integer",
+		"插件优先级必须是安全整数",
+		"scheduler_priority:priority}",
 	} {
 		if !strings.Contains(page, want) {
 			t.Fatalf("page missing scheduler priority validation marker %q", want)
@@ -813,24 +816,28 @@ func TestStatusPageValidatesSchedulerPriorityBeforePatch(t *testing.T) {
 	if strings.Contains(page, "Number.parseInt(document.getElementById('editSchedulerPriority').value,10)||0") {
 		t.Fatal("page still coerces invalid scheduler priority to zero")
 	}
-	validation := strings.Index(page, "if(!Number.isSafeInteger(schedulerPriority))")
+	validation := strings.Index(page, "if(!Number.isSafeInteger(priority))")
 	// Anchor on the save-account PATCH body (togglePin sends scheduler_priority:priority
 	// and needs no user-input validation).
-	patch := strings.Index(page, "scheduler_priority:schedulerPriority}")
+	patch := strings.Index(page, "scheduler_priority:priority}")
 	if validation < 0 || patch < 0 || validation > patch {
 		t.Fatalf("scheduler priority validation must return before PATCH: validation=%d patch=%d", validation, patch)
 	}
 }
 
-func TestStatusPageUsesCollapsedSettingsAndNoHardReload(t *testing.T) {
+func TestStatusPageUsesPagedSettingsAndNoHardReload(t *testing.T) {
 	store := NewPluginState(DefaultConfig())
 	page := renderStatusPageForTest(t, store)
-	if !strings.Contains(page, `<details class="section collapsible" id="settingsPanel" hidden>`) &&
-		!strings.Contains(page, `<details class="panel collapsible" id="settingsPanel" hidden>`) {
-		t.Fatalf("page does not render settings as collapsed details")
+	if !strings.Contains(page, `href="#${route}"`) {
+		t.Fatalf("page does not render hash-routed navigation")
 	}
-	if strings.Contains(page, `id="settingsPanel" open`) {
-		t.Fatalf("settings panel is open by default")
+	if !strings.Contains(page, `function renderNotLoaded()`) {
+		t.Fatalf("page does not gate content behind the protected load")
+	}
+	for _, want := range []string{`['overview'`, `['logs'`, `['settings'`, `['retry'`, `getRoute()`, `history.replaceState(null,'','#overview')`, `aria-current="page"`} {
+		if !strings.Contains(page, want) {
+			t.Fatalf("page missing navigation marker %q", want)
+		}
 	}
 	if strings.Contains(page, "window.location.reload") {
 		t.Fatalf("page still contains hard reload")
@@ -839,13 +846,11 @@ func TestStatusPageUsesCollapsedSettingsAndNoHardReload(t *testing.T) {
 		t.Fatalf("page still contains scheduled hard reload helper")
 	}
 	for _, want := range []string{
-		`summary-toggle`,
 		`hasManagementKey`,
 		`requestManagement('/status'`,
-		`refreshStatus`,
-		`loadStatus`,
+		`async function loadStatus()`,
 		`startStatusPolling`,
-		`默认配置已经都设置好了，正常情况下不需要手动设置。`,
+		`默认配置已经过优化`,
 		`活跃刷新窗口`,
 		`重置后刷新延迟`,
 		`刷新失败重试间隔`,
@@ -855,13 +860,10 @@ func TestStatusPageUsesCollapsedSettingsAndNoHardReload(t *testing.T) {
 			t.Fatalf("page missing collapsed/public refresh marker %q", want)
 		}
 	}
-	settingsStart := strings.Index(page, `id="settingsPanel"`)
-	refreshStart := strings.Index(page, `id="refreshQuota"`)
-	if settingsStart < 0 || refreshStart < 0 {
-		t.Fatalf("page missing settings panel or refresh button")
-	}
-	if refreshStart > settingsStart {
-		t.Fatalf("refresh quota button is still inside or after the settings panel")
+	keyStart := strings.Index(page, `id="keyInput"`)
+	settingsStart := strings.Index(page, `data-setting=`)
+	if keyStart < 0 || settingsStart < 0 {
+		t.Fatalf("page missing key input or settings controls")
 	}
 	if strings.Contains(page, "requestPublicStatus") || strings.Contains(page, "PUBLIC_STATUS_BASE") {
 		t.Fatalf("page still contains public status fallback")
@@ -874,28 +876,20 @@ func TestStatusPageUsesCollapsedSettingsAndNoHardReload(t *testing.T) {
 func TestStatusPageShowsResetProbeWarningOnlyAfterProtectedLoadWhenDisabled(t *testing.T) {
 	store := NewPluginState(DefaultConfig())
 	page := renderStatusPageForTest(t, store)
-	warningStart := strings.Index(page, `id="resetProbeWarning"`)
-	settingsStart := strings.Index(page, `id="settingsPanel"`)
+	warningStart := strings.Index(page, `state.loaded&&!state.settingsDraft.activate_new_reset`)
+	settingsStart := strings.Index(page, `['activate_new_reset','enable_reset_probe','toggle']`)
 	if warningStart < 0 {
-		t.Fatalf("page missing reset probe warning: %s", page)
+		t.Fatalf("page missing reset probe warning gate: %s", page)
 	}
 	if settingsStart < 0 {
-		t.Fatalf("page missing settings panel: %s", page)
-	}
-	if warningStart > settingsStart {
-		t.Fatalf("reset probe warning renders after settings panel")
+		t.Fatalf("page missing settings mapping: %s", page)
 	}
 	for _, want := range []string{
-		`id="resetProbeWarning" hidden`,
-		`updateResetProbeWarning`,
-		`statusLoaded&&STATUS.settings&&STATUS.settings.enable_reset_probe!==true`,
-		`data-i18n="resetProbe.warningTitle"`,
-		`data-i18n="resetProbe.warningBody"`,
-		`name="enable_reset_probe"`,
-		`id="enableResetProbe"`,
-		`data-i18n="settings.enableResetProbe"`,
-		`enable_reset_probe:document.getElementById('enableResetProbe').checked`,
-		`document.getElementById('enableResetProbe').checked=s.enable_reset_probe===true`,
+		`state.loaded&&!state.settingsDraft.activate_new_reset`,
+		`自动激活新的额度周期：当前已关闭`,
+		`Automatic activation of new quota windows is off`,
+		`['activate_new_reset','enable_reset_probe','toggle']`,
+		`renderSwitch(key,!!v)`,
 	} {
 		if !strings.Contains(page, want) {
 			t.Fatalf("page missing reset probe marker %q", want)
@@ -906,9 +900,8 @@ func TestStatusPageShowsResetProbeWarningOnlyAfterProtectedLoadWhenDisabled(t *t
 func TestManagementEnglishResetProbeCopy(t *testing.T) {
 	page := renderStatusPageForTest(t, NewPluginState(DefaultConfig()))
 	for _, want := range []string{
-		"Probe performs read-only checks at the quota refresh interval with a 30-minute minimum, even while normal refresh is dormant",
-		"sends one tiny request only after detecting a lazy reset window",
-		"This may consume a small amount of quota.",
+		"If no new window appears after reset, send one tiny Codex request to activate it.",
+		"This may consume quota.",
 	} {
 		if !strings.Contains(page, want) {
 			t.Fatalf("English reset-probe disclosure missing %q", want)
@@ -919,9 +912,8 @@ func TestManagementEnglishResetProbeCopy(t *testing.T) {
 func TestManagementChineseResetProbeCopy(t *testing.T) {
 	page := renderStatusPageForTest(t, NewPluginState(DefaultConfig()))
 	for _, want := range []string{
-		"即使普通刷新处于休眠状态，Probe 也会按额度刷新间隔执行只读检查，最短 30 分钟",
-		"只有检测到延迟启动的重置窗口时，才发送一次极小请求",
-		"可能消耗少量额度",
+		"额度重置时间已到但新窗口迟迟未生成时，发送一次极小的 Codex 请求尝试「激活」新周期",
+		"其余时间只做只读检查；可能消耗少量额度",
 	} {
 		if !strings.Contains(page, want) {
 			t.Fatalf("Chinese reset-probe disclosure missing %q", want)
@@ -932,18 +924,18 @@ func TestManagementChineseResetProbeCopy(t *testing.T) {
 func TestStatusPageUsesPlainChineseProbeAndMonthlyCopy(t *testing.T) {
 	page := renderStatusPageForTest(t, NewPluginState(DefaultConfig()))
 	for _, want := range []string{
-		"自动激活新的额度周期",
-		"即使普通刷新处于休眠状态，Probe 也会按额度刷新间隔执行只读检查，最短 30 分钟",
-		"账号列表未确认时仍允许额度探测（高风险）",
+		"自动激活新的额度周期 ⚠",
+		"额度重置时间已到但新窗口迟迟未生成时，发送一次极小的 Codex 请求尝试「激活」新周期",
+		"账号列表未确认时仍允许额度探测 ⚠",
 		"通常应保持关闭",
 		"月度账号使用方式",
 		"优先使用月度账号",
-		`'settings.enableResetProbe':'Enable automatic reset probe'`,
-		`'settings.enableResetProbeHelp':'Probe performs read-only checks at the quota refresh interval with a 30-minute minimum`,
-		`'settings.provisionalProbe':'Allow quota probes when the account roster is unconfirmed (high risk)'`,
-		`'settings.provisionalProbeHelp':'When CPA temporarily cannot confirm the current accounts and priorities`,
-		`'settings.monthlyMode':'Monthly mode'`,
-		`'settings.monthlyPriority':'Prefer Monthly'`,
+		"Automatically activate a new quota window ⚠",
+		"If no new window appears after reset, send one tiny Codex request to activate it. This may consume quota.",
+		"Allow probing with an unconfirmed roster ⚠",
+		"When CPA cannot confirm current accounts, use a saved roster for probing with credential revalidation. Usually keep off.",
+		"Monthly account strategy",
+		"Monthly first",
 	} {
 		if !strings.Contains(page, want) {
 			t.Fatalf("status page missing %q", want)
@@ -965,11 +957,11 @@ func TestStatusPageDoesNotClobberDirtySettingsOnProtectedPoll(t *testing.T) {
 	store := NewPluginState(DefaultConfig())
 	page := renderStatusPageForTest(t, store)
 	for _, want := range []string{
-		"let settingsDirty=false",
-		"settingsFocusedOrDirty",
-		"settingsPanel.addEventListener('input'",
-		"fillSettings:true",
-		"!settingsFocusedOrDirty()",
+		"if(!state.settingsDirty)state.settingsDraft=clone(state.settingsSaved)",
+		"if(!state.retryDirty)state.retryDraft=clone(state.retrySaved)",
+		"state.settingsDirty=true",
+		"document.activeElement",
+		"contains(focus)",
 	} {
 		if !strings.Contains(page, want) {
 			t.Fatalf("page missing dirty settings guard marker %q", want)
@@ -980,12 +972,12 @@ func TestStatusPageDoesNotClobberDirtySettingsOnProtectedPoll(t *testing.T) {
 func TestDynamicAccountRenderingUsesChineseBaseText(t *testing.T) {
 	store := NewPluginState(DefaultConfig())
 	page := renderStatusPageForTest(t, store)
-	for _, want := range []string{"addBadge('可用'", "'5 小时额度'", "'刷新额度'", "'编辑'", "renderEmptyState", "暂无账号数据"} {
+	for _, want := range []string{"pill(tr('可用','Available')", "'5 小时额度'", "tr('刷新额度','Refresh')", "tr('编辑','Edit')", "empty.title||tr('暂无账号数据'", "等待额度刷新后，这里会显示账号卡片"} {
 		if !strings.Contains(page, want) {
 			t.Fatalf("page missing localized dynamic rendering marker %q", want)
 		}
 	}
-	for _, forbidden := range []string{"addBadge('Available'", "addQuota(account.five_hour,'5-hour quota'", "'No account data yet.'"} {
+	for _, forbidden := range []string{"addBadge(", "quotaFillClass(", "renderAccounts(STATUS.accounts"} {
 		if strings.Contains(page, forbidden) {
 			t.Fatalf("dynamic account rendering still contains English base text %q", forbidden)
 		}
@@ -995,7 +987,7 @@ func TestDynamicAccountRenderingUsesChineseBaseText(t *testing.T) {
 func TestDynamicAccountRenderingShowsResetCreditExpiry(t *testing.T) {
 	store := NewPluginState(DefaultConfig())
 	page := renderStatusPageForTest(t, store)
-	for _, want := range []string{"resetCreditSummary", "reset_credits", "expires_at"} {
+	for _, want := range []string{"reset_credits_available_count", "reset_credits_total_earned_count", "Active resets"} {
 		if !strings.Contains(page, want) {
 			t.Fatalf("page missing reset credit expiry marker %q", want)
 		}
@@ -1005,7 +997,7 @@ func TestDynamicAccountRenderingShowsResetCreditExpiry(t *testing.T) {
 func TestDynamicAccountRenderingShowsEmptyStateAndStatusNote(t *testing.T) {
 	store := NewPluginState(DefaultConfig())
 	page := renderStatusPageForTest(t, store)
-	for _, want := range []string{"renderEmptyState", "STATUS.empty_state", "account.status_note", "调度状态"} {
+	for _, want := range []string{"STATUS.empty_state", "a.status_note", "state.accounts.length?", "暂无账号数据"} {
 		if !strings.Contains(page, want) {
 			t.Fatalf("page missing empty/status state marker %q", want)
 		}
@@ -1016,19 +1008,19 @@ func TestDynamicAccountRenderingHasBilingualStatusLabels(t *testing.T) {
 	store := NewPluginState(DefaultConfig())
 	page := renderStatusPageForTest(t, store)
 	for _, want := range []string{
-		"DUE_REASON_LABELS",
-		"UNAVAILABLE_REASON_LABELS",
-		"labelDueReason(account.refresh_due_reason)",
-		"labelUnavailableReason(account.unavailable_reason)",
-		".empty strong,.empty div",
-		"Quota data is stale or pending refresh",
-		"No Codex accounts were found",
-		"The scheduler is sleeping",
-		"Retry is due now",
-		"Circuit wait",
-		"No data",
-		"Used up",
-		"Scheduler state",
+		"function reasonText(a)",
+		"请重新登录",
+		"额度已耗尽",
+		"额度数据过期",
+		"熔断：等待中",
+		"托管停用 · 恢复中",
+		"上次刷新失败",
+		"Login required",
+		"Quota exhausted",
+		"Quota data stale",
+		"Circuit: waiting",
+		"Managed disable · recovering",
+		"Last refresh failed",
 	} {
 		if !strings.Contains(page, want) {
 			t.Fatalf("page missing bilingual dynamic label marker %q", want)
@@ -1040,11 +1032,12 @@ func TestStatusPageUsesProtectedLoadForStatusAndKeyForEdit(t *testing.T) {
 	store := NewPluginState(DefaultConfig())
 	page := renderStatusPageForTest(t, store)
 	for _, want := range []string{
-		"loadStatus",
+		"async function loadStatus()",
 		"startStatusPolling",
-		"await refreshStatus({management:true,fillSettings:true})",
-		"function openEdit(authID){if(!hasManagementKey())",
-		"logs:STATUS.logs||[]",
+		"await refreshSnapshot()",
+		"function openEditDialog(authID)",
+		"state.logs=Array.isArray(raw.logs)?raw.logs:[]",
+		"requestManagement('/status',{query:{format:'json'}})",
 	} {
 		if !strings.Contains(page, want) {
 			t.Fatalf("page missing protected load/key-gated edit marker %q", want)
@@ -1420,11 +1413,14 @@ func TestStatusPayloadAllowsMissingFiveHourWithLongWindow(t *testing.T) {
 		t.Fatalf("long_window = %#v, want visible", got.LongWindow)
 	}
 	html := string(RenderStatusHTML(payload))
-	if rows := strings.Count(html, `<div class="quota-row">`); rows != 1 {
-		t.Fatalf("server-rendered quota rows = %d, want only LongWindow", rows)
+	if strings.Contains(html, `{{range .Accounts}}`) {
+		t.Fatal("server still renders account cards; the JS renderer must be the single track")
 	}
-	if !strings.Contains(html, "if(account.five_hour&&!account.five_hour.missing)") {
+	if !strings.Contains(html, "const isMissing=!q||q.missing||q.remaining_percent==null") || !strings.Contains(html, "quotaMarkup(a.five_hour,tr('5 小时额度','5-hour quota'))") {
 		t.Fatal("dynamic account renderer lost missing FiveHour guard")
+	}
+	if !strings.Contains(html, "quotaMarkup(a.long_window,a.family==='monthly'?tr('月度额度','Monthly quota'):tr('周额度','Weekly quota'))") {
+		t.Fatal("dynamic account renderer lost long window row")
 	}
 }
 
@@ -1468,10 +1464,13 @@ func TestStatusHTMLShowsRemainingQuotaLocalResetTimesAndCompactMetadata(t *testi
 		t.Fatalf("StatusCode = %d, want %d; body=%s", resp.StatusCode, http.StatusOK, resp.Body)
 	}
 	html := string(resp.Body)
-	for _, want := range []string{"剩余 75%", "剩余 60%", "5 小时重置", "长额度重置", "localTime", "data-time=\"2026-06-21T12:00:00Z\"", "主力号", "运营组", "账号备注内容", "分组备注内容"} {
+	for _, want := range []string{"remaining_percent", "qpercent", "relativeUntil(q.reset_at||q.reset_text)", "localTime(q.reset_at||q.reset_text)", "cacheAgeLabel(a.cache_age)", "已用 ${Math.round(Number(q.used_percent))}% · 剩 ", "renderKeepScroll()", "等待额度刷新后，这里会显示账号卡片"} {
 		if !strings.Contains(html, want) {
-			t.Fatalf("html missing %q: %s", want, html)
+			t.Fatalf("html missing renderer marker %q: %s", want, html)
 		}
+	}
+	if strings.Contains(html, `{{range .Accounts}}`) {
+		t.Fatalf("server still renders account cards; the JS renderer must be the single track")
 	}
 }
 
@@ -1605,7 +1604,7 @@ func TestResourceStatusRendersUsablePluginPage(t *testing.T) {
 			t.Fatalf("resource status leaked privileged status marker %q: %s", forbidden, body)
 		}
 	}
-	for _, want := range []string{"logList", "managementKey", "loadStatus", "MANAGEMENT_BASE", "/v0/management/plugins/codex-quota-scheduler", "authHeaders()", "let STATUS=", `"shell":true`, "statusLoaded=!STATUS.shell", "notice.statusLoaded", "refreshStatus", "只要调度器启动了，它就会在后台自动运行，无需保持页面开启"} {
+	for _, want := range []string{"keyInput", "loadStatus", "MANAGEMENT_BASE", "/v0/management/plugins/codex-quota-scheduler", "authHeaders()", "let STATUS=", `"shell":true`, "function renderNotLoaded()", "state.loaded?", "refreshSnapshot", "调度器后台自动运行，无需保持页面开启"} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("resource status missing usable plugin page marker %q: %s", want, body)
 		}
@@ -2100,34 +2099,34 @@ func TestManagementHTMLIsUncacheableAndAcceptsItsOwnRetryBudgets(t *testing.T) {
 	page := string(RenderStatusHTML(BuildStatusShellPayload(time.Now())))
 
 	// The page validator accepts the seconds form that formatRetryDuration emits.
-	if !strings.Contains(page, `RETRY_DURATION_RE=/^(\d+(\.\d+)?(ns|us|µs|ms|s|m|h))+$/i`) {
+	if !strings.Contains(page, `^(?:\d+(?:\.\d+)?(?:ns|us|µs|ms|s|m|h))+$`) {
 		t.Fatalf("retry duration grammar is missing or stricter than the API output form")
 	}
-	// A bare number is read as seconds instead of being rejected.
-	if !strings.Contains(page, "function retryNormalizeDuration(") || !strings.Contains(page, "function retryDurationValue(") {
-		t.Fatalf("retry duration inputs do not normalize bare seconds")
+	// Durations are validated by the shared parser.
+	if !strings.Contains(page, "function isDuration(") || !strings.Contains(page, "function parseGoDurationSeconds(") {
+		t.Fatalf("retry duration inputs are not validated with the shared parser")
 	}
 	// Budget fields carry unit hints so the accepted form is visible.
-	for _, want := range []string{`id="retryStallTimeout" spellcheck="false" placeholder="60s"`, `id="retryChainDeadline" spellcheck="false" placeholder="240s"`} {
+	for _, want := range []string{"Go duration，例如 60s", "Go duration，例如 240s"} {
 		if !strings.Contains(page, want) {
 			t.Fatalf("retry page missing budget hint %q", want)
 		}
 	}
-	// Failures name the offending field and value instead of only the rule.
-	if !strings.Contains(page, "function retryProblemMessage(problem)") {
+	// Failures name the offending field instead of only the rule.
+	if !strings.Contains(page, "高级参数存在非法时长") || !strings.Contains(page, "原始模型不能重复") {
 		t.Fatalf("retry page does not report which budget failed")
 	}
 	for _, want := range []string{
-		`id="retryCheckCPA"`,
-		"function checkAndFixCPASettings()",
+		"button('check-preflight'",
+		"async function checkPreflight()",
 		"function requestManagementText(",
 		"function cpaVersionAtLeast(",
 		"v7.3.4",
 		"stream-bootstrap-buffering",
 		"stream-bootstrap-timeout",
 		"bootstrap-retries",
-		"function renumberRetryFallbacks(",
-		"for(const container of document.querySelectorAll('.retryFallbacks'))",
+		`data-action="move-target-up"`,
+		`data-action="move-chain-down"`,
 		"log.retry.attempt_started",
 	} {
 		if !strings.Contains(page, want) {

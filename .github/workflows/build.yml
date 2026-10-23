@@ -32,6 +32,16 @@ jobs:
       - name: Test
         run: make test
 
+      - name: Management page script syntax gate
+        run: |
+          set -euo pipefail
+          # The embedded management page script only executes in a real
+          # browser; a syntax error there kills every button (the v0.3.0
+          # missing-id and v0.4.0 collapsed-separator lessons). Render the
+          # page, export the script, and syntax-check it with node.
+          DUMP_PAGE_SCRIPT="$RUNNER_TEMP/page.js" go test -run TestDumpPageScript .
+          node --check "$RUNNER_TEMP/page.js"
+
       - name: Vet
         run: make vet
 

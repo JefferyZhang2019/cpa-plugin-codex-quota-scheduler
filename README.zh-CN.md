@@ -6,6 +6,21 @@
 账号提供额度感知的优化版 Fill First 调度，让 CPA 按账号的真实可用性选择账号，
 而不只是依赖固定的账号顺序。
 
+## v0.4.0 主要更新
+
+- **迁移到 CLIProxyAPI v8 SDK。** 插件现在基于
+  `router-for-me/CLIProxyAPI/v8`（v8.0.36）构建。插件消费的 ABI 相对 v7
+  系列为纯增量，ABIVersion 保持为 1，二进制同样可以在 CPA v7.3.x 宿主上加载。
+- **「刷新额度」现在会同步清除 CPA 核心冷却（#14）。** 手动刷新单个账号且新
+  额度证实有余量时，插件会同时调用 `host.routing.reset_cooldown` 清除该凭证
+  的核心冷却，恢复的账号不再被核心冷却状态硬阻塞。早于 v8 插件 ABI 的宿主
+  保持插件侧恢复并记录警告，不会报错。
+- **管理界面全面重构（v4）。** 四个 hash 路由页面（账号总览 / 日志 / 调度
+  设置 / 模型重试链）、设计 token 样式表、设置重组为五张卡片并使用数字+
+  单位的时长输入（API 载荷不变）、四选一分段模式替代原有三个易混淆开关、
+  页面间保存隔离、账号卡片只走 JS 渲染并精简优先级行、日志等级筛选芯片、
+  toast 通知。
+
 ## v0.3.3 主要更新
 
 - 修复响应流观察器的每请求内存泄漏（来自
@@ -460,8 +475,8 @@ make build
 构建发布压缩包和校验文件：
 
 ```bash
-make package VERSION=0.3.3
-make checksums VERSION=0.3.3
+make package VERSION=0.4.0
+make checksums VERSION=0.4.0
 ```
 
 Windows 用户可以用以下命令构建 `dist/codex-quota-scheduler.dll`：
@@ -476,8 +491,8 @@ Windows 用户可以用以下命令构建 `dist/codex-quota-scheduler.dll`：
 仓库，并发布各平台压缩包和 `checksums.txt`：
 
 ```bash
-git tag -a v0.3.3 -m "v0.3.3"
-git push origin v0.3.3
+git tag -a v0.4.0 -m "v0.4.0"
+git push origin v0.4.0
 ```
 
 发布包使用以下命名方式：

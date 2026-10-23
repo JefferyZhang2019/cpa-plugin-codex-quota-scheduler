@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/router-for-me/CLIProxyAPI/v7/sdk/pluginabi"
+	"github.com/router-for-me/CLIProxyAPI/v8/sdk/pluginabi"
 )
 
 func TestDecodeConfigDefaults(t *testing.T) {
@@ -51,9 +51,9 @@ func TestProbeOnProvisionalRosterIsExplicitRiskOption(t *testing.T) {
 	}
 }
 
-func TestPluginRegistrationUsesV033SourceVersion(t *testing.T) {
-	if got := PluginRegistration().Metadata.Version; got != "0.3.3" {
-		t.Fatalf("plugin registration version = %q, want 0.3.3", got)
+func TestPluginRegistrationUsesV040SourceVersion(t *testing.T) {
+	if got := PluginRegistration().Metadata.Version; got != "0.4.0" {
+		t.Fatalf("plugin registration version = %q, want 0.4.0", got)
 	}
 }
 
@@ -62,10 +62,10 @@ func TestReleaseVersionMetadataConsistent(t *testing.T) {
 		path string
 		want []string
 	}{
-		{"config.go", []string{`var pluginVersion = "0.3.3"`}},
-		{"Makefile", []string{"VERSION ?= 0.3.3"}},
-		{"README.md", []string{"## v0.3.3 Highlights", "make package VERSION=0.3.3", "make checksums VERSION=0.3.3", "git tag -a v0.3.3 -m \"v0.3.3\"", "git push origin v0.3.3"}},
-		{"README.zh-CN.md", []string{"## v0.3.3 主要更新", "make package VERSION=0.3.3", "make checksums VERSION=0.3.3", "git tag -a v0.3.3 -m \"v0.3.3\"", "git push origin v0.3.3"}},
+		{"config.go", []string{`var pluginVersion = "0.4.0"`}},
+		{"Makefile", []string{"VERSION ?= 0.4.0"}},
+		{"README.md", []string{"## v0.4.0 Highlights", "make package VERSION=0.4.0", "make checksums VERSION=0.4.0", "git tag -a v0.4.0 -m \"v0.4.0\"", "git push origin v0.4.0"}},
+		{"README.zh-CN.md", []string{"## v0.4.0 主要更新", "make package VERSION=0.4.0", "make checksums VERSION=0.4.0", "git tag -a v0.4.0 -m \"v0.4.0\"", "git push origin v0.4.0"}},
 	} {
 		contents, err := os.ReadFile(check.path)
 		if err != nil {
