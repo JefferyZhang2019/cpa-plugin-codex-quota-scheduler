@@ -64,8 +64,10 @@ func TestReleaseVersionMetadataConsistent(t *testing.T) {
 	}{
 		{"config.go", []string{`var pluginVersion = "0.4.1"`}},
 		{"Makefile", []string{"VERSION ?= 0.4.1"}},
-		{"README.md", []string{"## v0.4.1 Highlights", "make package VERSION=0.4.1", "make checksums VERSION=0.4.1", "git tag -a v0.4.1 -m \"v0.4.1\"", "git push origin v0.4.1"}},
-		{"README.zh-CN.md", []string{"## v0.4.1 主要更新", "make package VERSION=0.4.1", "make checksums VERSION=0.4.1", "git tag -a v0.4.1 -m \"v0.4.1\"", "git push origin v0.4.1"}},
+		{"CHANGELOG.md", []string{"## [v0.4.1] - 2026-10-24"}},
+		{"CHANGELOG.zh-CN.md", []string{"## [v0.4.1] - 2026-10-24"}},
+		{"README.md", []string{"make package VERSION=0.4.1", "make checksums VERSION=0.4.1", "git tag -a v0.4.1 -m \"v0.4.1\"", "git push origin v0.4.1", "[CHANGELOG.md](CHANGELOG.md)"}},
+		{"README.zh-CN.md", []string{"make package VERSION=0.4.1", "make checksums VERSION=0.4.1", "git tag -a v0.4.1 -m \"v0.4.1\"", "git push origin v0.4.1", "[CHANGELOG.zh-CN.md](CHANGELOG.zh-CN.md)"}},
 	} {
 		contents, err := os.ReadFile(check.path)
 		if err != nil {
