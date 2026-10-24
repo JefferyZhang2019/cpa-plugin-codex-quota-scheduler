@@ -7,6 +7,16 @@ provides a quota-aware, optimized Fill First scheduler for Codex accounts, so
 CPA selects accounts by real usability instead of relying on a static account
 order alone.
 
+## v0.4.1 Highlights
+
+- **Subpath deployments now work (#17).** The management page derives its API
+  root from its own URL instead of hardcoding the domain root, so a CPA
+  served behind a reverse proxy under a prefix (for example
+  `https://example.com/cpa/`) reaches `/cpa/v0/management/...` correctly.
+  Root-path deployments are unchanged.
+- The preflight check reads the CPA version from the version endpoint's
+  object payload (a v0.4.0 regression that silently aborted the check).
+
 ## v0.4.0 Highlights
 
 - **Migrated to the CLIProxyAPI v8 SDK.** The plugin now builds against
@@ -559,8 +569,8 @@ make build
 Build release archives and checksums:
 
 ```bash
-make package VERSION=0.4.0
-make checksums VERSION=0.4.0
+make package VERSION=0.4.1
+make checksums VERSION=0.4.1
 ```
 
 Windows users can build `dist/codex-quota-scheduler.dll` with:
@@ -576,8 +586,8 @@ workflow. It tests the repository and publishes platform archives plus
 `checksums.txt`:
 
 ```bash
-git tag -a v0.4.0 -m "v0.4.0"
-git push origin v0.4.0
+git tag -a v0.4.1 -m "v0.4.1"
+git push origin v0.4.1
 ```
 
 Release archives use this naming scheme:

@@ -6,6 +6,15 @@
 账号提供额度感知的优化版 Fill First 调度，让 CPA 按账号的真实可用性选择账号，
 而不只是依赖固定的账号顺序。
 
+## v0.4.1 主要更新
+
+- **支持子路径部署（#17）。** 管理页不再硬编码域名根路径，而是从页面自身
+  URL 推导 API 根，因此 CPA 经反向代理挂在子路径下（例如
+  `https://example.com/cpa/`）时也能正确访问 `/cpa/v0/management/...`。
+  根路径部署行为不变。
+- 前置检查改为从版本接口的对象载荷读取 CPA 版本（修复 v0.4.0 中导致检查
+  静默中止的问题）。
+
 ## v0.4.0 主要更新
 
 - **迁移到 CLIProxyAPI v8 SDK。** 插件现在基于
@@ -475,8 +484,8 @@ make build
 构建发布压缩包和校验文件：
 
 ```bash
-make package VERSION=0.4.0
-make checksums VERSION=0.4.0
+make package VERSION=0.4.1
+make checksums VERSION=0.4.1
 ```
 
 Windows 用户可以用以下命令构建 `dist/codex-quota-scheduler.dll`：
@@ -491,8 +500,8 @@ Windows 用户可以用以下命令构建 `dist/codex-quota-scheduler.dll`：
 仓库，并发布各平台压缩包和 `checksums.txt`：
 
 ```bash
-git tag -a v0.4.0 -m "v0.4.0"
-git push origin v0.4.0
+git tag -a v0.4.1 -m "v0.4.1"
+git push origin v0.4.1
 ```
 
 发布包使用以下命名方式：
