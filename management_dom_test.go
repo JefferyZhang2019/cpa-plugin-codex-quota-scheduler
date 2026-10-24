@@ -71,6 +71,40 @@ func TestDumpPageScript(t *testing.T) {
 	}
 }
 
+// TestManagementPageDerivesAPIRootFromURL guards issue #17: the page must not
+// hardcode the domain-root management path, otherwise deployments behind a
+// reverse-proxy subpath (/cpa/v0/management/...) load the page but every API
+// call 404s at the root.
+func TestManagementPageDerivesAPIRootFromURL(t *testing.T) {
+	store := NewPluginState(DefaultConfig())
+	resp := HandleManagementRequest(store, pluginapi.ManagementRequest{Method: http.MethodGet, Path: "/status"}, time.Now())
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("StatusCode = %d; body=%s", resp.StatusCode, resp.Body)
+	}
+	page := string(resp.Body)
+	for _, want := range []string{
+		"function apiRootPrefix()",
+		"const ROOT_PREFIX=apiRootPrefix()",
+		"const MANAGEMENT_BASE=ROOT_PREFIX+'/v0/management/plugins/codex-quota-scheduler'",
+		"url=ROOT_PREFIX+'/v0/management'+path",
+		"fetch(ROOT_PREFIX+'/v0/management'+path,init)",
+		"path.endsWith(suffix)",
+	} {
+		if !strings.Contains(page, want) {
+			t.Fatalf("page does not derive the API root from the URL; missing %q", want)
+		}
+	}
+	for _, forbidden := range []string{
+		"const MANAGEMENT_BASE='/v0/management",
+		"url='/v0/management'",
+		"fetch('/v0/management'",
+	} {
+		if strings.Contains(page, forbidden) {
+			t.Fatalf("page still hardcodes the domain-root API path %q", forbidden)
+		}
+	}
+}
+
 // TestStatusHTMLScriptReferencesResolve guards against the v0.3.0 breakage
 // class: the embedded script references an element id the template no longer
 // defines (or never defined), the reference returns null, and the first
